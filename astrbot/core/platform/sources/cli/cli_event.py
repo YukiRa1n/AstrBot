@@ -8,7 +8,6 @@ import asyncio
 from typing import Any
 
 from astrbot import logger
-from astrbot.core.message.components import Plain
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.platform.astr_message_event import AstrMessageEvent
 from astrbot.core.platform.astrbot_message import AstrBotMessage
@@ -47,7 +46,9 @@ class CLIMessageEvent(AstrMessageEvent):
             session_id=session_id,
         )
 
-        logger.debug("[ENTRY] CLIMessageEvent.__init__ inputs={message_str=%s}", message_str)
+        logger.debug(
+            "[ENTRY] CLIMessageEvent.__init__ inputs={message_str=%s}", message_str
+        )
 
         self.output_queue = output_queue
         self.response_future = response_future
@@ -63,28 +64,41 @@ class CLIMessageEvent(AstrMessageEvent):
         Returns:
             发送结果
         """
-        logger.debug("[ENTRY] CLIMessageEvent.send inputs={message_chain=%s}", message_chain)
+        logger.debug(
+            "[ENTRY] CLIMessageEvent.send inputs={message_chain=%s}", message_chain
+        )
 
         # Socket模式：直接设置Future结果（返回完整MessageChain以支持图片等组件）
         if self.response_future is not None and not self.response_future.done():
             # 预处理本地文件图片：立即读取并转换为base64（避免临时文件被删除）
-            from astrbot.core.message.components import Image
             import base64
             import os
 
+            from astrbot.core.message.components import Image
+
             for comp in message_chain.chain:
-                if isinstance(comp, Image) and comp.file and comp.file.startswith("file:///"):
+                if (
+                    isinstance(comp, Image)
+                    and comp.file
+                    and comp.file.startswith("file:///")
+                ):
                     file_path = comp.file[8:]  # 去掉 file:///
                     try:
                         if os.path.exists(file_path):
-                            with open(file_path, 'rb') as f:
+                            with open(file_path, "rb") as f:
                                 image_data = f.read()
-                                base64_data = base64.b64encode(image_data).decode('utf-8')
+                                base64_data = base64.b64encode(image_data).decode(
+                                    "utf-8"
+                                )
                                 # 修改Image组件，将本地文件转换为base64
                                 comp.file = f"base64://{base64_data}"
-                                logger.debug(f"[PROCESS] Converted local image to base64: {file_path}, size: {len(image_data)} bytes")
+                                logger.debug(
+                                    f"[PROCESS] Converted local image to base64: {file_path}, size: {len(image_data)} bytes"
+                                )
                     except Exception as e:
-                        logger.error(f"[ERROR] Failed to read image file {file_path}: {e}")
+                        logger.error(
+                            f"[ERROR] Failed to read image file {file_path}: {e}"
+                        )
 
             self.response_future.set_result(message_chain)
             logger.debug("[PROCESS] Set socket response future with MessageChain")
@@ -106,7 +120,9 @@ class CLIMessageEvent(AstrMessageEvent):
         Returns:
             发送结果
         """
-        logger.debug("[ENTRY] CLIMessageEvent.reply inputs={message_chain=%s}", message_chain)
+        logger.debug(
+            "[ENTRY] CLIMessageEvent.reply inputs={message_chain=%s}", message_chain
+        )
 
         result = await self.send(message_chain)
 
