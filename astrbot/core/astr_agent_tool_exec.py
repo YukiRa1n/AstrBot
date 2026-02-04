@@ -306,12 +306,20 @@ class FunctionToolExecutor(BaseFunctionToolExecutor[AstrAgentContext]):
             method_name=method_name,
             **tool_args,
         )
+
+        # 检查是否启用超时（0表示禁用）
+        timeout_enabled = run_context.tool_call_timeout > 0
+
         while True:
             try:
-                resp = await asyncio.wait_for(
-                    anext(wrapper),
-                    timeout=tool_call_timeout or run_context.tool_call_timeout,
-                )
+                if timeout_enabled:
+                    resp = await asyncio.wait_for(
+                        anext(wrapper),
+                        timeout=run_context.tool_call_timeout,
+                    )
+                else:
+                    # 超时禁用时，直接执行不设置超时
+                    resp = await anext(wrapper)
                 if resp is not None:
                     if isinstance(resp, mcp.types.CallToolResult):
                         yield resp
@@ -341,15 +349,10 @@ class FunctionToolExecutor(BaseFunctionToolExecutor[AstrAgentContext]):
                                 )
                     yield None
             except asyncio.TimeoutError:
-<<<<<<< HEAD
-                raise Exception(
-                    f"tool {tool.name} execution timeout after {tool_call_timeout or run_context.tool_call_timeout} seconds.",
-=======
                 # 超时后转为后台执行
                 logger.info(
                     f"[PROCESS] Tool {tool.name} timeout after {run_context.tool_call_timeout}s, "
                     f"switching to background execution"
->>>>>>> b2f49331 (feat: 实现后台工具执行系统)
                 )
 
                 # 获取后台工具管理器
