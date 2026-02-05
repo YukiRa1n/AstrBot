@@ -408,7 +408,7 @@ def fix_git_bash_path(message: str) -> str:
         # 提取原始命令
         command = match.group(2)
         # 获取剩余部分
-        rest = message[match.end():].lstrip()
+        rest = message[match.end() :].lstrip()
         if rest:
             return f"/{command} {rest}"
         return f"/{command}"
