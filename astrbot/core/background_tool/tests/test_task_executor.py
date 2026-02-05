@@ -1,12 +1,12 @@
 """TaskExecutor 单元测试"""
 
-import pytest
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
 
-from astrbot.core.background_tool.task_state import BackgroundTask, TaskStatus
-from astrbot.core.background_tool.task_executor import TaskExecutor
+import pytest
+
 from astrbot.core.background_tool.output_buffer import OutputBuffer
+from astrbot.core.background_tool.task_executor import TaskExecutor
+from astrbot.core.background_tool.task_state import BackgroundTask, TaskStatus
 
 
 class TestTaskExecutor:
@@ -31,7 +31,7 @@ class TestTaskExecutor:
         async def mock_handler(**kwargs):
             return "success result"
 
-        result = await self.executor.execute(
+        await self.executor.execute(
             task=task,
             handler=mock_handler,
         )
@@ -100,9 +100,7 @@ class TestTaskExecutor:
             return "should not reach"
 
         # 启动任务
-        exec_task = asyncio.create_task(
-            self.executor.execute(task=task, handler=slow_handler)
-        )
+        asyncio.create_task(self.executor.execute(task=task, handler=slow_handler))
 
         # 等待任务开始
         await asyncio.sleep(0.1)
@@ -131,9 +129,7 @@ class TestTaskExecutor:
             return "done"
 
         # 启动任务
-        exec_task = asyncio.create_task(
-            self.executor.execute(task=task, handler=slow_handler)
-        )
+        asyncio.create_task(self.executor.execute(task=task, handler=slow_handler))
 
         await asyncio.sleep(0.1)
 

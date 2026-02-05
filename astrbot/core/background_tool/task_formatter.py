@@ -25,7 +25,7 @@ def build_task_result(
         - 通知消息
     """
     status = task.status.value
-    result_text = f"Task {task_id} ({status}):\n"
+    result_text = f"Task {task_id} ({task.tool_name}, {status}):\n"
 
     # 如果有输出日志，显示日志
     if output:
@@ -39,6 +39,6 @@ def build_task_result(
             result_text += f"\n[ERROR]\n{task.error}"
 
     if not output and not task.is_finished():
-        return f"Task {task_id} ({status}): No output yet."
+        return f"Task {task_id} ({task.tool_name}, {status}): No output yet."
 
     return result_text

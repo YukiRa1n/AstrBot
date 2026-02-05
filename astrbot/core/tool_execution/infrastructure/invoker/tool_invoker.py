@@ -3,7 +3,8 @@
 包装LLM工具调用逻辑，实现IToolInvoker接口。
 """
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from astrbot.core.tool_execution.interfaces import IToolInvoker
 

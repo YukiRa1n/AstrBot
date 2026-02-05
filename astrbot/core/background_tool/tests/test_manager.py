@@ -1,7 +1,8 @@
 """BackgroundToolManager 单元测试"""
 
-import pytest
 import asyncio
+
+import pytest
 
 from astrbot.core.background_tool.manager import BackgroundToolManager
 from astrbot.core.background_tool.task_state import TaskStatus

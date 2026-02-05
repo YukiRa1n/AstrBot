@@ -5,15 +5,16 @@
 
 import asyncio
 import threading
-from typing import Any, Callable, Awaitable, AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from typing import Any
 
 from astrbot.core.tool_execution.domain.config import DEFAULT_CONFIG
 
-from .task_state import BackgroundTask, TaskStatus
-from .task_registry import TaskRegistry
+from .output_buffer import OutputBuffer
 from .task_executor import TaskExecutor
 from .task_notifier import TaskNotifier
-from .output_buffer import OutputBuffer
+from .task_registry import TaskRegistry
+from .task_state import BackgroundTask
 
 
 class BackgroundToolManager:
@@ -79,9 +80,9 @@ class BackgroundToolManager:
                 buffer_cleaned = self.output_buffer.cleanup_old_buffers(valid_task_ids)
 
                 # 清理孤立的中断标记（没有活跃任务的会话）
-                active_sessions = set(
+                active_sessions = {
                     task.session_id for task in self.registry._tasks.values()
-                )
+                }
                 stale_flags = [
                     sid for sid in self._interrupt_flags if sid not in active_sessions
                 ]

@@ -1,6 +1,5 @@
 """OutputBuffer 单元测试"""
 
-import pytest
 from astrbot.core.background_tool.output_buffer import OutputBuffer
 
 
