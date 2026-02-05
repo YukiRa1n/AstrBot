@@ -1,4 +1,3 @@
-import asyncio
 import inspect
 import traceback
 import typing as T
@@ -14,7 +13,6 @@ from astrbot.core.agent.tool_executor import BaseFunctionToolExecutor
 from astrbot.core.astr_agent_context import AstrAgentContext
 from astrbot.core.message.message_event_result import (
     CommandResult,
-    MessageChain,
     MessageEventResult,
 )
 from astrbot.core.provider.register import llm_tools

@@ -15,10 +15,8 @@ from asyncio import Queue
 
 from astrbot.core import logger
 from astrbot.core.astrbot_config_mgr import AstrBotConfigManager
-from astrbot.core.pipeline.scheduler import PipelineScheduler
 from astrbot.core.background_tool.manager import BackgroundToolManager
-from astrbot.core.message.components import Plain
-from astrbot.core.message.message_event_result import MessageChain
+from astrbot.core.pipeline.scheduler import PipelineScheduler
 
 from .platform import AstrMessageEvent
 
