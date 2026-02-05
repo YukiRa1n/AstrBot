@@ -13,7 +13,6 @@ from astrbot.core.tool_execution.domain.config import DEFAULT_CONFIG
 
 from .task_state import BackgroundTask, TaskStatus
 
-
 # 状态文本映射
 STATUS_TEXT_MAP = {
     TaskStatus.COMPLETED: "completed successfully",
@@ -110,9 +109,7 @@ class CallbackEventBuilder:
             回调事件对象，构建失败返回 None
         """
         if not task.event:
-            logger.warning(
-                f"[CallbackEventBuilder] Task {task.task_id} has no event"
-            )
+            logger.warning(f"[CallbackEventBuilder] Task {task.task_id} has no event")
             return None
 
         try:

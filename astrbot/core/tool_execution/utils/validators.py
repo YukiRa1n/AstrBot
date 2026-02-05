@@ -6,13 +6,13 @@
 import re
 from typing import Any
 
-
 # 有效的 task_id/session_id 模式（只允许字母、数字、下划线、连字符）
 VALID_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]{1,128}$")
 
 
 class ValidationError(ValueError):
     """验证错误"""
+
     pass
 
 
@@ -36,8 +36,8 @@ def validate_task_id(task_id: Any) -> str:
 
     if not VALID_ID_PATTERN.match(task_id):
         raise ValidationError(
-            f"Invalid task_id format: must be 1-128 alphanumeric characters, "
-            f"underscores, or hyphens"
+            "Invalid task_id format: must be 1-128 alphanumeric characters, "
+            "underscores, or hyphens"
         )
 
     return task_id
@@ -56,7 +56,9 @@ def validate_session_id(session_id: Any) -> str:
         ValidationError: 验证失败
     """
     if not isinstance(session_id, str):
-        raise ValidationError(f"session_id must be string, got {type(session_id).__name__}")
+        raise ValidationError(
+            f"session_id must be string, got {type(session_id).__name__}"
+        )
 
     if not session_id:
         raise ValidationError("session_id cannot be empty")

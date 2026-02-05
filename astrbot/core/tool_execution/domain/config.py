@@ -3,9 +3,7 @@
 集中管理工具执行系统的配置常量。
 """
 
-from dataclasses import dataclass, field
-from typing import Any
-
+from dataclasses import dataclass
 
 # 后台任务管理工具名称（不应用超时）
 BACKGROUND_TOOL_NAMES = frozenset(

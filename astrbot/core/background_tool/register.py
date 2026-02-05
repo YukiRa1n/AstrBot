@@ -15,9 +15,9 @@ def register_background_tools(llm_tools: FuncCall) -> None:
     """
     from .llm_tools import (
         get_tool_output,
-        wait_tool_result,
-        stop_tool,
         list_running_tools,
+        stop_tool,
+        wait_tool_result,
     )
 
     # 注册 get_tool_output 工具

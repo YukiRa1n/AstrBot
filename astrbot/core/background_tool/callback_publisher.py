@@ -4,11 +4,10 @@
 遵循单一职责原则，只负责队列操作。
 """
 
-from typing import Any
-
 from astrbot import logger
-from .task_state import BackgroundTask
+
 from .callback_event_builder import CallbackEventBuilder
+from .task_state import BackgroundTask
 
 
 class CallbackPublisher:
@@ -41,9 +40,7 @@ class CallbackPublisher:
             return False
 
         if not task.event:
-            logger.warning(
-                f"[CallbackPublisher] Task {task.task_id} has no event"
-            )
+            logger.warning(f"[CallbackPublisher] Task {task.task_id} has no event")
             return False
 
         if not task.event_queue:
@@ -80,13 +77,9 @@ class CallbackPublisher:
             task.event_queue.put_nowait(event)
             task.notification_sent = True
 
-            logger.info(
-                f"[CallbackPublisher] Task {task.task_id} callback queued"
-            )
+            logger.info(f"[CallbackPublisher] Task {task.task_id} callback queued")
             return True
 
         except Exception as e:
-            logger.error(
-                f"[CallbackPublisher] Failed to publish callback: {e}"
-            )
+            logger.error(f"[CallbackPublisher] Failed to publish callback: {e}")
             return False

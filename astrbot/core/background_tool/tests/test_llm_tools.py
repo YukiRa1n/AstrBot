@@ -1,17 +1,17 @@
 """LLM工具集单元测试"""
 
-import pytest
 import asyncio
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock
+
+import pytest
 
 from astrbot.core.background_tool.llm_tools import (
     get_tool_output,
-    wait_tool_result,
-    stop_tool,
     list_running_tools,
+    stop_tool,
 )
 from astrbot.core.background_tool.manager import BackgroundToolManager
-from astrbot.core.background_tool.task_state import BackgroundTask, TaskStatus
+from astrbot.core.background_tool.task_state import BackgroundTask
 
 
 class TestLLMTools:

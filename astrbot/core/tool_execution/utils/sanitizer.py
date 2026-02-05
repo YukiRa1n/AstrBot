@@ -6,31 +6,32 @@
 import re
 from typing import Any
 
-
 # 敏感参数名称（不区分大小写）
-SENSITIVE_PARAM_NAMES = frozenset({
-    "password",
-    "passwd",
-    "pwd",
-    "token",
-    "api_key",
-    "apikey",
-    "secret",
-    "credential",
-    "credentials",
-    "auth",
-    "authorization",
-    "access_token",
-    "refresh_token",
-    "private_key",
-    "privatekey",
-    "secret_key",
-    "secretkey",
-    "key",  # 通用key
-    "session_id",
-    "cookie",
-    "cookies",
-})
+SENSITIVE_PARAM_NAMES = frozenset(
+    {
+        "password",
+        "passwd",
+        "pwd",
+        "token",
+        "api_key",
+        "apikey",
+        "secret",
+        "credential",
+        "credentials",
+        "auth",
+        "authorization",
+        "access_token",
+        "refresh_token",
+        "private_key",
+        "privatekey",
+        "secret_key",
+        "secretkey",
+        "key",  # 通用key
+        "session_id",
+        "cookie",
+        "cookies",
+    }
+)
 
 # 用于替换的掩码
 MASK = "***REDACTED***"
@@ -38,7 +39,9 @@ MASK = "***REDACTED***"
 # 敏感值模式（用于检测值中的敏感内容）
 SENSITIVE_VALUE_PATTERNS = [
     re.compile(r"(?i)(bearer\s+)[a-z0-9\-_.]+", re.IGNORECASE),  # Bearer token
-    re.compile(r"(?i)(api[_-]?key[=:]\s*)[a-z0-9\-_.]+", re.IGNORECASE),  # API key in value
+    re.compile(
+        r"(?i)(api[_-]?key[=:]\s*)[a-z0-9\-_.]+", re.IGNORECASE
+    ),  # API key in value
     re.compile(r"sk-[a-zA-Z0-9]{20,}"),  # OpenAI-style API key
     re.compile(r"ghp_[a-zA-Z0-9]{36,}"),  # GitHub token
     re.compile(r"gho_[a-zA-Z0-9]{36,}"),  # GitHub OAuth token
@@ -55,11 +58,15 @@ def _mask_sensitive_value(value: str) -> str:
     """对值中的敏感内容进行掩码处理"""
     result = value
     for pattern in SENSITIVE_VALUE_PATTERNS:
-        result = pattern.sub(lambda m: m.group(1) + MASK if m.lastindex else MASK, result)
+        result = pattern.sub(
+            lambda m: m.group(1) + MASK if m.lastindex else MASK, result
+        )
     return result
 
 
-def sanitize_params(params: dict[str, Any], max_value_length: int = 100) -> dict[str, Any]:
+def sanitize_params(
+    params: dict[str, Any], max_value_length: int = 100
+) -> dict[str, Any]:
     """脱敏参数字典
 
     Args:
@@ -93,8 +100,10 @@ def sanitize_params(params: dict[str, Any], max_value_length: int = 100) -> dict
         elif isinstance(value, (list, tuple)):
             # 处理列表/元组
             sanitized[key] = [
-                sanitize_params(v, max_value_length) if isinstance(v, dict)
-                else _mask_sensitive_value(str(v)) if isinstance(v, str)
+                sanitize_params(v, max_value_length)
+                if isinstance(v, dict)
+                else _mask_sensitive_value(str(v))
+                if isinstance(v, str)
                 else v
                 for v in value
             ]

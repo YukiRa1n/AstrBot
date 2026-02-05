@@ -1,11 +1,11 @@
 """TaskNotifier 单元测试"""
 
-import pytest
-import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-from astrbot.core.background_tool.task_state import BackgroundTask, TaskStatus
+import pytest
+
 from astrbot.core.background_tool.task_notifier import TaskNotifier
+from astrbot.core.background_tool.task_state import BackgroundTask
 
 
 class TestTaskNotifier:

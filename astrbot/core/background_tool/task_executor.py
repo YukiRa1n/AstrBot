@@ -7,15 +7,16 @@ import asyncio
 import json
 import os
 import traceback
-from typing import Any, Callable, Awaitable, AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 
 from astrbot import logger
-from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 from astrbot.core.tool_execution.utils.sanitizer import sanitize_for_log
-from .task_state import BackgroundTask, TaskStatus
+from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+
+from .callback_publisher import CallbackPublisher
 from .output_buffer import OutputBuffer
 from .task_notifier import TaskNotifier
-from .callback_publisher import CallbackPublisher
+from .task_state import BackgroundTask
 
 
 def _get_background_task_timeout() -> int:
@@ -31,6 +32,7 @@ class _ConfigCache:
 
     缓存配置值，避免频繁读取配置文件。
     """
+
     _timeout: int | None = None
     _last_load: float = 0
     _cache_ttl: float = 60.0  # 缓存有效期60秒
@@ -39,17 +41,21 @@ class _ConfigCache:
     def get_timeout(cls) -> int:
         """获取超时配置，带缓存"""
         import time
+
         current_time = time.time()
 
         # 检查缓存是否过期
-        if cls._timeout is not None and (current_time - cls._last_load) < cls._cache_ttl:
+        if (
+            cls._timeout is not None
+            and (current_time - cls._last_load) < cls._cache_ttl
+        ):
             return cls._timeout
 
         # 重新加载配置
         try:
             config_path = os.path.join(get_astrbot_data_path(), "cmd_config.json")
             if os.path.exists(config_path):
-                with open(config_path, "r", encoding="utf-8-sig") as f:
+                with open(config_path, encoding="utf-8-sig") as f:
                     config = json.load(f)
                     cls._timeout = config.get("provider_settings", {}).get(
                         "background_task_wait_timeout", 600
@@ -164,7 +170,9 @@ class TaskExecutor:
             user_error_msg = f"Task failed: {type(e).__name__}: {e}"
             # 仅在 DEBUG 日志中记录完整堆栈
             debug_error_msg = f"{e}\n{traceback.format_exc()}"
-            logger.debug(f"[BackgroundTask:{task.task_id}] Full traceback: {debug_error_msg}")
+            logger.debug(
+                f"[BackgroundTask:{task.task_id}] Full traceback: {debug_error_msg}"
+            )
 
             task.fail(user_error_msg)
 
@@ -220,7 +228,7 @@ class TaskExecutor:
             else:
                 return result
 
-        except Exception as e:
+        except Exception:
             raise
 
     async def cancel(self, task_id: str) -> bool:

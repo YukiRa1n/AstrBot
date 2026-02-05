@@ -1,7 +1,7 @@
 """TaskState 单元测试"""
 
-import pytest
 import time
+
 from astrbot.core.background_tool.task_state import (
     BackgroundTask,
     TaskStatus,

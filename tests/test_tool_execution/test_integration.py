@@ -9,10 +9,11 @@
 """
 
 import asyncio
-import pytest
-from unittest.mock import Mock, AsyncMock, MagicMock, patch
 from dataclasses import dataclass
 from typing import Any
+from unittest.mock import Mock
+
+import pytest
 
 
 # 测试用的模拟类
@@ -86,7 +87,6 @@ class TestNormalToolExecution:
         async def handler(event, **kwargs):
             return "hello world"
 
-        tool = MockFunctionTool("test_tool", handler)
         event = MockEvent()
 
         result = await handler(event)
@@ -156,7 +156,7 @@ class TestTaskRegistry:
 
     def test_register_and_get(self):
         """注册和获取任务"""
-        from astrbot.core.background_tool import TaskRegistry, BackgroundTask
+        from astrbot.core.background_tool import BackgroundTask, TaskRegistry
 
         registry = TaskRegistry()
         registry.clear()  # 清空单例状态
@@ -228,7 +228,7 @@ class TestTimeoutBehavior:
 
         # 使用短超时测试
         try:
-            result = await asyncio.wait_for(slow_handler(MockEvent()), timeout=0.1)
+            await asyncio.wait_for(slow_handler(MockEvent()), timeout=0.1)
         except asyncio.TimeoutError:
             # 预期会超时
             pass
@@ -246,7 +246,9 @@ class TestMethodResolver:
         from astrbot.core.tool_execution.infrastructure.handler import MethodResolver
 
         class MockTool:
-            handler = lambda self, x: x
+            def handler(self, x):
+                return x
+
             name = "test"
 
         resolver = MethodResolver()
@@ -324,6 +326,7 @@ class TestResultProcessor:
     async def test_process_call_tool_result(self):
         """测试CallToolResult直接返回"""
         import mcp.types
+
         from astrbot.core.tool_execution.infrastructure.handler import ResultProcessor
 
         processor = ResultProcessor()
@@ -422,8 +425,8 @@ class TestMethodResolverAdvanced:
 
     def test_resolve_failure_no_handler(self):
         """测试无handler时抛出异常"""
-        from astrbot.core.tool_execution.infrastructure.handler import MethodResolver
         from astrbot.core.tool_execution.errors import MethodResolutionError
+        from astrbot.core.tool_execution.infrastructure.handler import MethodResolver
 
         class MockTool:
             handler = None
@@ -518,10 +521,10 @@ class TestErrorHandling:
 
     def test_parameter_validation_error_unexpected_arg(self):
         """测试意外参数触发验证错误"""
+        from astrbot.core.tool_execution.errors import ParameterValidationError
         from astrbot.core.tool_execution.infrastructure.handler import (
             ParameterValidator,
         )
-        from astrbot.core.tool_execution.errors import ParameterValidationError
 
         def handler(event, name: str):
             pass
@@ -548,7 +551,6 @@ class TestBackgroundToolConfig:
         """测试默认配置值"""
         from astrbot.core.tool_execution.domain.config import (
             DEFAULT_CONFIG,
-            BackgroundToolConfig,
         )
 
         assert DEFAULT_CONFIG.cleanup_interval_seconds == 600
@@ -576,8 +578,8 @@ class TestCallbackEventBuilder:
         """测试通知文本构建"""
         from astrbot.core.background_tool import (
             BackgroundTask,
-            TaskStatus,
             CallbackEventBuilder,
+            TaskStatus,
         )
 
         task = BackgroundTask(
@@ -601,8 +603,8 @@ class TestCallbackEventBuilder:
         """测试错误预览截断"""
         from astrbot.core.background_tool import (
             BackgroundTask,
-            TaskStatus,
             CallbackEventBuilder,
+            TaskStatus,
         )
         from astrbot.core.tool_execution.domain.config import BackgroundToolConfig
 
@@ -725,8 +727,9 @@ class TestRWLock:
 
     def test_read_lock_allows_concurrent_reads(self):
         """测试读锁允许并发读取"""
-        from astrbot.core.tool_execution.utils.rwlock import RWLock
         import threading
+
+        from astrbot.core.tool_execution.utils.rwlock import RWLock
 
         lock = RWLock()
         read_count = [0]
@@ -737,6 +740,7 @@ class TestRWLock:
                 read_count[0] += 1
                 max_concurrent[0] = max(max_concurrent[0], read_count[0])
                 import time
+
                 time.sleep(0.01)
                 read_count[0] -= 1
 
@@ -760,10 +764,12 @@ class TestRWLock:
             with lock.write():
                 current = data["value"]
                 import time
+
                 time.sleep(0.01)
                 data["value"] = current + 1
 
         import threading
+
         threads = [threading.Thread(target=writer) for _ in range(5)]
         for t in threads:
             t.start()
@@ -787,8 +793,8 @@ class TestValidators:
     def test_invalid_task_id_type(self):
         """测试无效的任务ID类型"""
         from astrbot.core.tool_execution.utils.validators import (
-            validate_task_id,
             ValidationError,
+            validate_task_id,
         )
 
         try:
@@ -800,8 +806,8 @@ class TestValidators:
     def test_invalid_task_id_format(self):
         """测试无效的任务ID格式"""
         from astrbot.core.tool_execution.utils.validators import (
-            validate_task_id,
             ValidationError,
+            validate_task_id,
         )
 
         try:
@@ -820,8 +826,8 @@ class TestValidators:
     def test_session_id_dangerous_chars(self):
         """测试会话ID危险字符"""
         from astrbot.core.tool_execution.utils.validators import (
-            validate_session_id,
             ValidationError,
+            validate_session_id,
         )
 
         try:
@@ -833,8 +839,8 @@ class TestValidators:
     def test_validate_positive_int(self):
         """测试正整数验证"""
         from astrbot.core.tool_execution.utils.validators import (
-            validate_positive_int,
             ValidationError,
+            validate_positive_int,
         )
 
         assert validate_positive_int(10, "count") == 10
@@ -857,8 +863,9 @@ class TestConfigCache:
 
     def test_cache_reuse(self):
         """测试缓存重用"""
-        from astrbot.core.background_tool.task_executor import _ConfigCache
         import time
+
+        from astrbot.core.background_tool.task_executor import _ConfigCache
 
         # 重置缓存
         _ConfigCache._timeout = None
@@ -876,4 +883,3 @@ class TestConfigCache:
         # 加载时间应该相同（使用了缓存）
         assert first_load_time == second_load_time
         assert result1 == result2
-

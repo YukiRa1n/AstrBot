@@ -3,10 +3,10 @@
 任务完成后主动通知AI。
 """
 
-from typing import Callable, Awaitable
+from collections.abc import Awaitable, Callable
 
-from .task_state import BackgroundTask, TaskStatus
 from .task_formatter import build_task_result
+from .task_state import BackgroundTask
 
 
 class TaskNotifier:
