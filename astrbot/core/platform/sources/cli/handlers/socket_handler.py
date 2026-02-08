@@ -252,7 +252,7 @@ class SocketClientHandler:
                     # 级别过滤（匹配 [级别] 格式）
                     if level_filter:
                         # 匹配 [级别] 格式，例如 [ERRO], [WARN], [INFO]
-                        if not re.search(rf'\[{level_filter}\]', line):
+                        if not re.search(rf"\[{level_filter}\]", line):
                             continue
 
                     # 模式过滤
