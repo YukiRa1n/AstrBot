@@ -184,9 +184,7 @@ class SocketClientHandler:
             )
             if message_chain is None:
                 # 管道完成但没有产生任何回复（被白名单/频率限制等拦截）
-                return ResponseBuilder.build_success(
-                    MessageChain([]), request_id
-                )
+                return ResponseBuilder.build_success(MessageChain([]), request_id)
             return ResponseBuilder.build_success(message_chain, request_id)
         except asyncio.TimeoutError:
             return ResponseBuilder.build_error("Request timeout", request_id, "TIMEOUT")
