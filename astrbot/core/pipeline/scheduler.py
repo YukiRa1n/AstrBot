@@ -53,7 +53,7 @@ class PipelineScheduler:
                     # 此处是前置处理完成后的暂停点(yield), 下面开始执行后续阶段
                     if event.is_stopped():
                         logger.debug(
-                            f"阶段 {stage.__class__.__name__} 已终止事件传播。",
+                            f"Stage {stage.__class__.__name__} stopped event propagation.",
                         )
                         break
 
@@ -63,7 +63,7 @@ class PipelineScheduler:
                     # 此处是后续所有阶段处理完毕后返回的点, 执行后置处理
                     if event.is_stopped():
                         logger.debug(
-                            f"阶段 {stage.__class__.__name__} 已终止事件传播。",
+                            f"Stage {stage.__class__.__name__} stopped event propagation.",
                         )
                         break
             else:
@@ -72,7 +72,9 @@ class PipelineScheduler:
                 await coroutine
 
                 if event.is_stopped():
-                    logger.debug(f"阶段 {stage.__class__.__name__} 已终止事件传播。")
+                    logger.debug(
+                        f"Stage {stage.__class__.__name__} stopped event propagation."
+                    )
                     break
 
     async def execute(self, event: AstrMessageEvent) -> None:
@@ -86,14 +88,15 @@ class PipelineScheduler:
         try:
             await self._process_stages(event)
 
-            # 如果没有发送操作, 则发送一个空消息, 以便于后续的处理
-            if isinstance(event, WebChatMessageEvent | WecomAIBotMessageEvent):
-                await event.send(None)
-
-            # 通知事件管道已完成（鸭子类型，供需要收集完整响应的适配器使用）
+            # 通知事件管道已完成（鸭子类型，供需要收集完整响应的适配器使用，如 CLI 适配器）
             if hasattr(event, "finalize"):
                 await event.finalize()
 
-            logger.debug("pipeline 执行完毕。")
+            # 发送一个空消息, 以便于后续的处理
+            if isinstance(event, WebChatMessageEvent | WecomAIBotMessageEvent):
+                await event.send(None)
+
+            logger.debug("pipeline execution completed.")
         finally:
+            event.cleanup_temporary_local_files()
             active_event_registry.unregister(event)

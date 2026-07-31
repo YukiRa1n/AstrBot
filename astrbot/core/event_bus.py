@@ -33,19 +33,34 @@ class EventBus:
         # abconf uuid -> scheduler
         self.pipeline_scheduler_mapping = pipeline_scheduler_mapping
         self.astrbot_config_mgr = astrbot_config_mgr
+        # 持有正在执行的 pipeline 任务的强引用, 防止 task 在 pending 状态被 GC 回收
+        self._pending_tasks: set[asyncio.Task] = set()
 
     async def dispatch(self) -> None:
         while True:
             event: AstrMessageEvent = await self.event_queue.get()
             conf_info = self.astrbot_config_mgr.get_conf_info(event.unified_msg_origin)
-            self._print_event(event, conf_info["name"])
-            scheduler = self.pipeline_scheduler_mapping.get(conf_info["id"])
+            conf_id = conf_info["id"]
+            conf_name = conf_info.get("name") or conf_id
+            self._print_event(event, conf_name)
+            scheduler = self.pipeline_scheduler_mapping.get(conf_id)
             if not scheduler:
                 logger.error(
-                    f"PipelineScheduler not found for id: {conf_info['id']}, event ignored."
+                    f"PipelineScheduler not found for id: {conf_id}, event ignored."
                 )
                 continue
-            asyncio.create_task(scheduler.execute(event))
+            task = asyncio.create_task(scheduler.execute(event))
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._on_task_done)
+
+    def _on_task_done(self, task: asyncio.Task) -> None:
+        """pipeline 任务结束回调: 移除强引用并暴露未捕获的异常"""
+        self._pending_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Pipeline task failed.", exc_info=exc)
 
     def _print_event(self, event: AstrMessageEvent, conf_name: str) -> None:
         """用于记录事件信息
@@ -58,9 +73,11 @@ class EventBus:
         if event.get_sender_name():
             logger.info(
                 f"[{conf_name}] [{event.get_platform_id()}({event.get_platform_name()})] {event.get_sender_name()}/{event.get_sender_id()}: {event.get_message_outline()}",
+                extra={"category": "user_chat"},
             )
         # 没有发送者名称: [平台名] 发送者ID: 消息概要
         else:
             logger.info(
                 f"[{conf_name}] [{event.get_platform_id()}({event.get_platform_name()})] {event.get_sender_id()}: {event.get_message_outline()}",
+                extra={"category": "user_chat"},
             )

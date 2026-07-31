@@ -21,6 +21,7 @@
     },
     "description": {
       "openai": "也支持所有兼容 OpenAI API 的模型提供商。",
+      "kimi_code": "Kimi 的 CodingPlan / Kimi Code 专用接入，使用特殊的 Anthropic API 兼容适配。",
       "vllm_rerank": "也支持 Jina AI, Cohere, PPIO 等提供商。",
       "default": ""
     }
@@ -93,6 +94,7 @@
   "providerSources": {
     "title": "提供商源",
     "add": "新增",
+    "delete": "删除提供商源",
     "empty": "暂无提供商源",
     "selectHint": "请选择一个提供商源",
     "selectCreated": "选择已创建的提供商源",
@@ -123,6 +125,7 @@
     }
   },
   "models": {
+    "title": "模型",
     "available": "可用模型",
     "configured": "已配置的模型",
     "empty": "暂无已配置的模型，点击上方的\"获取模型列表\"添加",
@@ -133,6 +136,7 @@
     "deleteSuccess": "模型删除成功",
     "deleteError": "模型删除失败",
     "testSuccess": "模型 {id} 测试通过",
+    "testSuccessWithLatency": "模型 {id} 测试通过，延迟 {latency} ms",
     "testError": "模型测试失败",
     "searchPlaceholder": "搜索模型或 ID",
     "manualAddButton": "自定义模型",
@@ -143,6 +147,17 @@
     "manualModelRequired": "请输入模型 ID",
     "manualModelExists": "该模型已存在",
     "configure": "配置",
+    "testButton": "测试模型",
+    "metadata": {
+      "image": "图像输入",
+      "audio": "音频输入",
+      "toolUse": "工具使用",
+      "reasoning": "推理",
+      "context": "{tokens} 上下文窗口",
+      "available": "模型 metadata 支持{capability}",
+      "enabled": "已启用{capability}",
+      "supportedDisabled": "模型 metadata 支持{capability}，但当前提供商的模型能力未启用。"
+    },
     "tooltips": {
       "providerId": "提供商 ID",
       "modelId": "模型 ID"

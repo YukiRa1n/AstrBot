@@ -21,9 +21,13 @@ from astrbot.core.db.po import (
     PlatformSession,
     PlatformStat,
     Preference,
+    ProviderStat,
     SessionProjectRelation,
     Stats,
+    UmoAlias,
+    WebChatThread,
 )
+from astrbot.core.sentinels import NOT_GIVEN
 
 
 @dataclass
@@ -33,10 +37,18 @@ class BaseDatabase(abc.ABC):
     DATABASE_URL = ""
 
     def __init__(self) -> None:
+        # SQLite only supports a single writer at a time.  Without a busy
+        # timeout the driver raises "database is locked" instantly when a
+        # second write is attempted.  Setting timeout=30 tells SQLite to
+        # wait up to 30 s for the lock, which is enough to ride out brief
+        # write bursts from concurrent agent/metrics/session operations.
+        is_sqlite = "sqlite" in self.DATABASE_URL
+        connect_args = {"timeout": 30} if is_sqlite else {}
         self.engine = create_async_engine(
             self.DATABASE_URL,
             echo=False,
             future=True,
+            connect_args=connect_args,
         )
         self.AsyncSessionLocal = async_sessionmaker(
             self.engine,
@@ -98,6 +110,21 @@ class BaseDatabase(abc.ABC):
         ...
 
     @abc.abstractmethod
+    async def insert_provider_stat(
+        self,
+        *,
+        umo: str,
+        provider_id: str,
+        provider_model: str | None = None,
+        conversation_id: str | None = None,
+        status: str = "completed",
+        stats: dict | None = None,
+        agent_type: str = "internal",
+    ) -> ProviderStat:
+        """Insert a per-response provider stat record."""
+        ...
+
+    @abc.abstractmethod
     async def get_conversations(
         self,
         user_id: str | None = None,
@@ -130,9 +157,19 @@ class BaseDatabase(abc.ABC):
         page_size: int = 20,
         platform_ids: list[str] | None = None,
         search_query: str = "",
+        include_history: bool = True,
         **kwargs,
     ) -> tuple[list[ConversationV2], int]:
-        """Get conversations filtered by platform IDs and search query."""
+        """Filter conversations by platform IDs and search text.
+
+        Args:
+            page: Page number.
+            page_size: Number of items per page.
+            platform_ids: Platform IDs to include, if any.
+            search_query: Search text, if any.
+            include_history: Whether to load the full history for returned rows.
+            **kwargs: Additional filters supported by the database backend.
+        """
         ...
 
     @abc.abstractmethod
@@ -180,8 +217,25 @@ class BaseDatabase(abc.ABC):
         content: dict,
         sender_id: str | None = None,
         sender_name: str | None = None,
+        llm_checkpoint_id: str | None = None,
+        max_messages: int | None = None,
     ) -> PlatformMessageHistory:
         """Insert a new platform message history record."""
+        ...
+
+    @abc.abstractmethod
+    async def update_platform_message_history(
+        self,
+        message_id: int,
+        content: dict | None = None,
+        llm_checkpoint_id: str | None = None,
+    ) -> None:
+        """Update a platform message history record."""
+        ...
+
+    @abc.abstractmethod
+    async def delete_platform_message_history_by_id(self, message_id: int) -> None:
+        """Delete a platform message history record by its ID."""
         ...
 
     @abc.abstractmethod
@@ -211,6 +265,68 @@ class BaseDatabase(abc.ABC):
         message_id: int,
     ) -> PlatformMessageHistory | None:
         """Get a platform message history record by its ID."""
+        ...
+
+    @abc.abstractmethod
+    async def create_webchat_thread(
+        self,
+        creator: str,
+        parent_session_id: str,
+        parent_message_id: int,
+        base_checkpoint_id: str,
+        selected_text: str,
+    ) -> WebChatThread:
+        """Create a WebChat side thread."""
+        ...
+
+    @abc.abstractmethod
+    async def get_webchat_thread_by_id(
+        self,
+        thread_id: str,
+    ) -> WebChatThread | None:
+        """Get a WebChat side thread by thread_id."""
+        ...
+
+    @abc.abstractmethod
+    async def get_webchat_threads_by_parent_session(
+        self,
+        parent_session_id: str,
+        creator: str | None = None,
+    ) -> list[WebChatThread]:
+        """Get side threads for a parent WebChat session."""
+        ...
+
+    @abc.abstractmethod
+    async def get_webchat_thread_by_parent_message_and_text(
+        self,
+        parent_session_id: str,
+        parent_message_id: int,
+        selected_text: str,
+        creator: str | None = None,
+    ) -> WebChatThread | None:
+        """Get an existing side thread for the same selected text."""
+        ...
+
+    @abc.abstractmethod
+    async def delete_webchat_thread(self, thread_id: str) -> None:
+        """Delete a WebChat side thread."""
+        ...
+
+    @abc.abstractmethod
+    async def delete_webchat_threads_by_parent_session(
+        self,
+        parent_session_id: str,
+    ) -> list[str]:
+        """Delete side threads for a parent WebChat session."""
+        ...
+
+    @abc.abstractmethod
+    async def delete_webchat_threads_by_parent_message_ids(
+        self,
+        parent_session_id: str,
+        parent_message_ids: list[int],
+    ) -> list[str]:
+        """Delete side threads linked to parent message IDs."""
         ...
 
     @abc.abstractmethod
@@ -306,6 +422,7 @@ class BaseDatabase(abc.ABC):
         begin_dialogs: list[str] | None = None,
         tools: list[str] | None = None,
         skills: list[str] | None = None,
+        custom_error_message: str | None = None,
         folder_id: str | None = None,
         sort_order: int = 0,
     ) -> Persona:
@@ -317,6 +434,7 @@ class BaseDatabase(abc.ABC):
             begin_dialogs: Optional list of initial dialog strings
             tools: Optional list of tool names (None means all tools, [] means no tools)
             skills: Optional list of skill names (None means all skills, [] means no skills)
+            custom_error_message: Optional persona-level fallback error message
             folder_id: Optional folder ID to place the persona in (None means root)
             sort_order: Sort order within the folder (default 0)
         """
@@ -338,10 +456,23 @@ class BaseDatabase(abc.ABC):
         persona_id: str,
         system_prompt: str | None = None,
         begin_dialogs: list[str] | None = None,
-        tools: list[str] | None = None,
-        skills: list[str] | None = None,
+        tools: list[str] | None | object = NOT_GIVEN,
+        skills: list[str] | None | object = NOT_GIVEN,
+        custom_error_message: str | None | object = NOT_GIVEN,
     ) -> Persona | None:
-        """Update a persona's system prompt or begin dialogs."""
+        """Update a persona record.
+
+        Args:
+            persona_id: Persona ID to update.
+            system_prompt: Optional replacement system prompt.
+            begin_dialogs: Optional replacement begin dialogs.
+            tools: Tool names, None for all tools, or NOT_GIVEN to leave unchanged.
+            skills: Skill names, None for all skills, or NOT_GIVEN to leave unchanged.
+            custom_error_message: Custom fallback message, None to clear, or NOT_GIVEN to leave unchanged.
+
+        Returns:
+            Updated persona, or None when no fields were updated.
+        """
         ...
 
     @abc.abstractmethod
@@ -645,6 +776,13 @@ class BaseDatabase(abc.ABC):
         ...
 
     @abc.abstractmethod
+    async def get_platform_sessions_by_ids(
+        self, session_ids: list[str]
+    ) -> list[PlatformSession]:
+        """Get platform sessions by IDs."""
+        ...
+
+    @abc.abstractmethod
     async def get_platform_sessions_by_creator(
         self,
         creator: str,
@@ -689,6 +827,31 @@ class BaseDatabase(abc.ABC):
         ...
 
     # ====
+    # UMO Alias Management
+    # ====
+
+    @abc.abstractmethod
+    async def upsert_umo_alias(
+        self,
+        umo: str,
+        creator_sender_id: str,
+        auto_name: str | None,
+        user_alias: str | None,
+    ) -> UmoAlias:
+        """Create or update the display alias metadata for a UMO."""
+        ...
+
+    @abc.abstractmethod
+    async def get_umo_alias(self, umo: str) -> UmoAlias | None:
+        """Get alias metadata for one UMO."""
+        ...
+
+    @abc.abstractmethod
+    async def get_umo_aliases(self, umos: list[str] | None = None) -> list[UmoAlias]:
+        """Get alias metadata, optionally restricted to the given UMO list."""
+        ...
+
+    # ====
     # ChatUI Project Management
     # ====
 
@@ -699,6 +862,8 @@ class BaseDatabase(abc.ABC):
         title: str,
         emoji: str | None = "📁",
         description: str | None = None,
+        workspace_type: str = "session",
+        workspace_path: str | None = None,
     ) -> ChatUIProject:
         """Create a new ChatUI project."""
         ...
@@ -725,6 +890,8 @@ class BaseDatabase(abc.ABC):
         title: str | None = None,
         emoji: str | None = None,
         description: str | None = None,
+        workspace_type: str | None = None,
+        workspace_path: str | None = None,
     ) -> None:
         """Update a ChatUI project."""
         ...

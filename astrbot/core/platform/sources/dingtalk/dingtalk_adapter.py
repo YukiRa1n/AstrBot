@@ -1,7 +1,9 @@
 import asyncio
 import json
 import threading
+import time
 import uuid
+from concurrent.futures import CancelledError as FutureCancelledError
 from pathlib import Path
 from typing import Literal, NoReturn, cast
 
@@ -11,7 +13,7 @@ from dingtalk_stream import AckMessage
 
 from astrbot import logger
 from astrbot.api.event import MessageChain
-from astrbot.api.message_components import At, Image, Plain, Record, Video
+from astrbot.api.message_components import At, File, Image, Plain, Record, Video
 from astrbot.api.platform import (
     AstrBotMessage,
     MessageMember,
@@ -24,6 +26,7 @@ from astrbot.core.platform.astr_message_event import MessageSesion
 from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 from astrbot.core.utils.io import download_file
 from astrbot.core.utils.media_utils import (
+    MediaResolver,
     convert_audio_format,
     convert_video_format,
     extract_video_cover,
@@ -32,6 +35,18 @@ from astrbot.core.utils.media_utils import (
 
 from ...register import register_platform_adapter
 from .dingtalk_event import DingtalkMessageEvent
+
+DINGTALK_RECONNECT_INITIAL_DELAY = 10
+DINGTALK_RECONNECT_MAX_DELAY = 300
+DINGTALK_RECONNECT_STABLE_SECONDS = 300
+
+
+def _dingtalk_reconnect_delay(retry_count: int) -> int:
+    safe_retry_count = max(retry_count, 1)
+    return min(
+        DINGTALK_RECONNECT_INITIAL_DELAY * 2 ** (safe_retry_count - 1),
+        DINGTALK_RECONNECT_MAX_DELAY,
+    )
 
 
 class MyEventHandler(dingtalk_stream.EventHandler):
@@ -82,7 +97,8 @@ class DingtalkPlatformAdapter(Platform):
             self.client,
         )
         self.client_ = client  # 用于 websockets 的 client
-        self._shutdown_event: threading.Event | None = None
+        self._shutdown_event = threading.Event()
+        self._terminated_event = threading.Event()
 
     def _id_to_sid(self, dingtalk_id: str | None) -> str:
         if not dingtalk_id:
@@ -166,41 +182,138 @@ class DingtalkPlatformAdapter(Platform):
         abm.message_id = cast(str, message.message_id)
         abm.raw_message = message
 
+        leading_at_is_self = False
         if abm.type == MessageType.GROUP_MESSAGE:
             # 处理所有被 @ 的用户（包括机器人自己，因 at_users 已包含）
             if message.at_users:
-                for user in message.at_users:
+                for index, user in enumerate(message.at_users):
                     if id := self._id_to_sid(user.dingtalk_id):
                         abm.message.append(At(qq=id))
+                        if index == 0 and id == abm.self_id:
+                            leading_at_is_self = True
             abm.group_id = message.conversation_id
             abm.session_id = abm.group_id
         else:
             abm.session_id = abm.sender.user_id
 
         message_type: str = cast(str, message.message_type)
+        robot_code = cast(str, message.robot_code or "")
+        raw_content = cast(dict, message.extensions.get("content") or {})
+        if not isinstance(raw_content, dict):
+            raw_content = {}
         match message_type:
             case "text":
                 abm.message_str = message.text.content.strip()
                 abm.message.append(Plain(abm.message_str))
+            case "picture":
+                if not robot_code:
+                    logger.error("钉钉图片消息解析失败: 回调中缺少 robotCode")
+                    await self._remember_sender_binding(message, abm)
+                    return abm
+                image_content = cast(
+                    dingtalk_stream.ImageContent | None,
+                    message.image_content,
+                )
+                download_code = cast(
+                    str, (image_content.download_code if image_content else "") or ""
+                )
+                if not download_code:
+                    logger.warning("钉钉图片消息缺少 downloadCode，已跳过")
+                else:
+                    f_path = await self.download_ding_file(
+                        download_code,
+                        robot_code,
+                        "jpg",
+                    )
+                    if f_path:
+                        abm.message.append(Image.fromFileSystem(f_path))
+                    else:
+                        logger.warning("钉钉图片消息下载失败，无法解析为图片")
             case "richText":
                 rtc: dingtalk_stream.RichTextContent = cast(
                     dingtalk_stream.RichTextContent, message.rich_text_content
                 )
                 contents: list[dict] = cast(list[dict], rtc.rich_text_list)
-                for content in contents:
-                    plains = ""
+                plain_parts: list[str] = []
+                for index, content in enumerate(contents):
                     if "text" in content:
-                        plains += content["text"]
-                        abm.message.append(Plain(plains))
+                        plain_text = cast(str, content.get("text") or "")
+                        if plain_text:
+                            # HarmonyOS repeats the leading bot mention as a text
+                            # segment even though atUsers already represents it.
+                            if (
+                                index == 0
+                                and leading_at_is_self
+                                and plain_text.lstrip().startswith("@")
+                            ):
+                                continue
+                            plain_parts.append(plain_text)
+                            abm.message.append(Plain(plain_text))
                     elif "type" in content and content["type"] == "picture":
+                        download_code = cast(str, content.get("downloadCode") or "")
+                        if not download_code:
+                            logger.warning(
+                                "钉钉富文本图片消息缺少 downloadCode，已跳过"
+                            )
+                            continue
+                        if not robot_code:
+                            logger.error(
+                                "钉钉富文本图片消息解析失败: 回调中缺少 robotCode"
+                            )
+                            continue
                         f_path = await self.download_ding_file(
-                            content["downloadCode"],
-                            cast(str, message.robot_code),
+                            download_code,
+                            robot_code,
                             "jpg",
                         )
-                        abm.message.append(Image.fromFileSystem(f_path))
-            case "audio":
-                pass
+                        if f_path:
+                            abm.message.append(Image.fromFileSystem(f_path))
+                abm.message_str = "".join(plain_parts).strip()
+            case "audio" | "voice":
+                download_code = cast(str, raw_content.get("downloadCode") or "")
+                if not download_code:
+                    logger.warning("钉钉语音消息缺少 downloadCode，已跳过")
+                elif not robot_code:
+                    logger.error("钉钉语音消息解析失败: 回调中缺少 robotCode")
+                else:
+                    voice_ext = cast(str, raw_content.get("fileExtension") or "")
+                    if not voice_ext:
+                        voice_ext = "amr"
+                    voice_ext = voice_ext.lstrip(".")
+                    f_path = await self.download_ding_file(
+                        download_code,
+                        robot_code,
+                        voice_ext,
+                    )
+                    if f_path:
+                        path_wav = await MediaResolver(
+                            f_path,
+                            media_type="audio",
+                            default_suffix=".wav",
+                        ).to_path(target_format="wav")
+                        abm.message.append(Record(file=path_wav, url=path_wav))
+            case "file":
+                download_code = cast(str, raw_content.get("downloadCode") or "")
+                if not download_code:
+                    logger.warning("钉钉文件消息缺少 downloadCode，已跳过")
+                elif not robot_code:
+                    logger.error("钉钉文件消息解析失败: 回调中缺少 robotCode")
+                else:
+                    file_name = cast(str, raw_content.get("fileName") or "")
+                    file_ext = Path(file_name).suffix.lstrip(".") if file_name else ""
+                    if not file_ext:
+                        file_ext = cast(str, raw_content.get("fileExtension") or "")
+                    if not file_ext:
+                        file_ext = "file"
+                    f_path = await self.download_ding_file(
+                        download_code,
+                        robot_code,
+                        file_ext,
+                    )
+                    if f_path:
+                        if not file_name:
+                            file_name = Path(f_path).name
+                        abm.message.append(File(name=file_name, file=f_path))
 
         await self._remember_sender_binding(message, abm)
         return abm  # 别忘了返回转换后的消息对象
@@ -270,13 +383,23 @@ class DingtalkPlatformAdapter(Platform):
                 )
                 return ""
             resp_data = await resp.json()
-            download_url = resp_data["data"]["downloadUrl"]
+            download_url = cast(
+                str,
+                (
+                    resp_data.get("downloadUrl")
+                    or resp_data.get("data", {}).get("downloadUrl")
+                    or ""
+                ),
+            )
+            if not download_url:
+                logger.error(f"下载钉钉文件失败: 未找到 downloadUrl, 响应: {resp_data}")
+                return ""
             await download_file(download_url, str(f_path))
         return str(f_path)
 
     async def get_access_token(self) -> str:
         try:
-            access_token = await asyncio.get_event_loop().run_in_executor(
+            access_token = await asyncio.get_running_loop().run_in_executor(
                 None,
                 self.client_.get_access_token,
             )
@@ -465,13 +588,17 @@ class DingtalkPlatformAdapter(Platform):
                 text = segment.text.strip()
                 if not text and not at_str:
                     continue
-                await send_message(
-                    msg_key="sampleMarkdown",
-                    msg_param={
-                        "title": "AstrBot",
-                        "text": f"{at_str} {text}".strip(),
-                    },
-                )
+                text = f"{at_str} {text}".strip()
+                if message_chain.use_markdown_ is False:
+                    await send_message(
+                        msg_key="sampleText",
+                        msg_param={"content": text},
+                    )
+                else:
+                    await send_message(
+                        msg_key="sampleMarkdown",
+                        msg_param={"title": "AstrBot", "text": text},
+                    )
             elif isinstance(segment, Image):
                 photo_url = segment.file or segment.url or ""
                 if photo_url.startswith(("http://", "https://")):
@@ -541,6 +668,28 @@ class DingtalkPlatformAdapter(Platform):
                     self._safe_remove_file(cover_path)
                     if converted_video:
                         self._safe_remove_file(video_path)
+            elif isinstance(segment, File):
+                try:
+                    file_path = await segment.get_file()
+                    if not file_path:
+                        logger.warning("钉钉文件发送失败: 无法解析文件路径")
+                        continue
+                    media_id = await self.upload_media(file_path, "file")
+                    if not media_id:
+                        continue
+                    file_name = segment.name or Path(file_path).name
+                    file_type = Path(file_name).suffix.lstrip(".")
+                    await send_message(
+                        msg_key="sampleFile",
+                        msg_param={
+                            "mediaId": media_id,
+                            "fileName": file_name,
+                            "fileType": file_type,
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(f"钉钉文件发送失败: {e}")
+                    continue
 
     async def send_message_chain_to_group(
         self,
@@ -619,46 +768,110 @@ class DingtalkPlatformAdapter(Platform):
                 # at_str=at_str,
             )
 
-    async def handle_msg(self, abm: AstrBotMessage) -> None:
-        event = DingtalkMessageEvent(
-            message_str=abm.message_str,
-            message_obj=abm,
+    def create_event(self, message: AstrBotMessage) -> DingtalkMessageEvent:
+        """Creates a Dingtalk message event.
+
+        Args:
+            message: AstrBot message object to wrap.
+
+        Returns:
+            Created Dingtalk message event.
+        """
+        return DingtalkMessageEvent(
+            message_str=message.message_str,
+            message_obj=message,
             platform_meta=self.meta(),
-            session_id=abm.session_id,
+            session_id=message.session_id,
             client=self.client,
             adapter=self,
         )
 
-        self._event_queue.put_nowait(event)
+    async def handle_msg(self, abm: AstrBotMessage) -> None:
+        self.commit_event(self.create_event(abm))
 
     async def run(self) -> None:
         # await self.client_.start()
         # 钉钉的 SDK 并没有实现真正的异步，start() 里面有堵塞方法。
-        def start_client(loop: asyncio.AbstractEventLoop) -> None:
-            try:
-                self._shutdown_event = threading.Event()
-                task = loop.create_task(self.client_.start())
-                self._shutdown_event.wait()
-                if task.done():
-                    task.result()
-            except Exception as e:
-                if "Graceful shutdown" in str(e):
-                    logger.info("钉钉适配器已被关闭")
-                    return
-                logger.error(f"钉钉机器人启动失败: {e}")
+        # SDK 内部已有 while True 重连循环，但需要监控 task 状态，
+        # 如果 task 意外退出则重新启动。
 
-        loop = asyncio.get_event_loop()
+        def start_client(loop: asyncio.AbstractEventLoop) -> None:
+            retry_count = 0
+
+            def handle_retry(error_msg: str, run_seconds: float) -> None:
+                nonlocal retry_count
+                logger.error(error_msg)
+                if run_seconds >= DINGTALK_RECONNECT_STABLE_SECONDS:
+                    retry_count = 0
+                retry_count += 1
+                delay = _dingtalk_reconnect_delay(retry_count)
+                logger.info(
+                    f"钉钉适配器将在 {delay} 秒后重连 (第 {retry_count} 次)...",
+                )
+                self._terminated_event.wait(delay)
+
+            while not self._terminated_event.is_set():
+                task = None
+                should_cancel_task = False
+                start_time = time.monotonic()
+                try:
+                    self._shutdown_event.clear()
+                    if self._terminated_event.is_set():
+                        return
+                    task = asyncio.run_coroutine_threadsafe(self.client_.start(), loop)
+                    # 当 task 完成时唤醒线程（无论是正常退出还是异常退出）
+                    task.add_done_callback(lambda _: self._shutdown_event.set())
+                    if self._terminated_event.is_set():
+                        should_cancel_task = True
+                        self._shutdown_event.set()
+                    self._shutdown_event.wait()
+                    if self._terminated_event.is_set():
+                        return
+                    if task.done():
+                        try:
+                            exc = task.exception()
+                        except (asyncio.CancelledError, FutureCancelledError):
+                            logger.info("钉钉适配器 task 已取消")
+                            return
+                        if exc:
+                            if "Graceful shutdown" in str(exc):
+                                logger.info("钉钉适配器已被关闭")
+                                return
+                            should_cancel_task = True
+                            handle_retry(
+                                f"钉钉 SDK task 异常退出: {exc}",
+                                time.monotonic() - start_time,
+                            )
+                            continue
+                    # task 仍在运行，shutdown_event 被设置（正常关闭）
+                    return
+                except Exception as e:
+                    if "Graceful shutdown" in str(e):
+                        logger.info("钉钉适配器已被关闭")
+                        return
+                    should_cancel_task = True
+                    handle_retry(
+                        f"钉钉机器人启动失败: {e}",
+                        time.monotonic() - start_time,
+                    )
+                    continue
+                finally:
+                    # 仅在重试/失败路径取消 task，正常关闭不取消
+                    if task is not None and not task.done() and should_cancel_task:
+                        task.cancel()
+
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, start_client, loop)
 
     async def terminate(self) -> None:
         def monkey_patch_close() -> NoReturn:
             raise KeyboardInterrupt("Graceful shutdown")
 
+        self._terminated_event.set()
+        self._shutdown_event.set()
         if self.client_.websocket is not None:
             self.client_.open_connection = monkey_patch_close
             await self.client_.websocket.close(code=1000, reason="Graceful shutdown")
-        if self._shutdown_event is not None:
-            self._shutdown_event.set()
 
     def get_client(self):
         return self.client

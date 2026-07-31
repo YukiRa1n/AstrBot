@@ -37,10 +37,12 @@
         <h3>{{ tm('search.title') }}</h3>
         <v-card variant="outlined" class="mt-2 pa-3">
           <div>
-            <v-text-field v-model="searchMemoryUserId" :label="tm('search.userIdLabel')" variant="outlined" density="compact" hide-details
-              class="mb-2"></v-text-field>
-            <v-text-field v-model="searchQuery" :label="tm('search.queryLabel')" variant="outlined" density="compact" hide-details
-              @keyup.enter="searchMemory" class="mb-2"></v-text-field>
+            <v-text-field :model-value="searchMemoryUserId"
+              @update:model-value="onSearchMemoryUserIdInput" :label="tm('search.userIdLabel')" variant="outlined" density="compact" hide-details
+              class="mb-2" clearable></v-text-field>
+            <v-text-field :model-value="searchQuery"
+              @update:model-value="onSearchQueryInput" :label="tm('search.queryLabel')" variant="outlined" density="compact" hide-details
+              @keyup.enter="searchMemory" class="mb-2" clearable></v-text-field>
             <v-btn color="info" @click="searchMemory" :loading="isSearching" variant="tonal">
               <v-icon start>mdi-text-search</v-icon>
               {{ tm('search.searchButton') }}
@@ -156,11 +158,11 @@
 
       <v-dialog v-model="showFactDialog" max-width="550" scrollable>
         <v-card class="fact-detail-card">
-          <v-card-title class="d-flex align-center bg-primary text-white px-4 py-3">
-            <v-icon class="mr-2" color="white">mdi-memory</v-icon>
+          <v-card-title class="text-h3 pa-4 pb-0 pl-6 d-flex align-center">
+            <v-icon class="mr-2" color="primary">mdi-memory</v-icon>
             {{ tm('factDialog.title') }}
             <v-spacer></v-spacer>
-            <v-btn icon variant="text" color="white" @click="showFactDialog = false">
+            <v-btn icon variant="text" @click="showFactDialog = false">
               <v-icon>mdi-close</v-icon>
             </v-btn>
           </v-card-title>
@@ -251,9 +253,10 @@
 </template>
 
 <script>
-import axios from 'axios';
+import { pluginExtensionApi } from '@/api/v1';
 // import * as d3 from "d3"; // npm install d3
 import { useModuleI18n } from '@/i18n/composables';
+import { normalizeTextInput } from '@/utils/inputValue';
 
 export default {
   name: 'LongTermMemory',
@@ -336,9 +339,16 @@ export default {
     this.searchResults = [];
   },
   methods: {
+    onSearchMemoryUserIdInput(value) {
+      this.searchMemoryUserId = normalizeTextInput(value);
+    },
+    onSearchQueryInput(value) {
+      this.searchQuery = normalizeTextInput(value);
+    },
     // 添加搜索记忆方法
     searchMemory() {
-      if (!this.searchQuery.trim()) {
+      const query = normalizeTextInput(this.searchQuery).trim();
+      if (!query) {
         this.$toast.warning(this.tm('messages.searchQueryRequired'));
         return;
       }
@@ -349,15 +359,16 @@ export default {
 
       // 构建查询参数
       const params = {
-        query: this.searchQuery
+        query
       };
 
       // 如果有选择用户ID，也加入查询参数
-      if (this.searchMemoryUserId) {
-        params.user_id = this.searchMemoryUserId;
+      const normalizedUserId = normalizeTextInput(this.searchMemoryUserId).trim();
+      if (normalizedUserId) {
+        params.user_id = normalizedUserId;
       }
 
-      axios.get('/api/plug/alkaid/ltm/graph/search', { params })
+      pluginExtensionApi.get('alkaid/ltm/graph/search', { params })
         .then(response => {
           if (response.data.status === 'ok') {
             const data = response.data.data;
@@ -404,7 +415,7 @@ export default {
         need_summarize: this.needSummarize
       };
 
-      axios.post('/api/plug/alkaid/ltm/graph/add', payload)
+      pluginExtensionApi.post('alkaid/ltm/graph/add', payload)
         .then(response => {
           // 成功添加后刷新图表
           this.refreshGraph();
@@ -429,7 +440,7 @@ export default {
       this.isLoading = true;
       const params = userId ? { user_id: userId } : {};
 
-      axios.get('/api/plug/alkaid/ltm/graph', { params })
+      pluginExtensionApi.get('alkaid/ltm/graph', { params })
         .then(response => {
           const data = response.data.data || {};
           // 确保数据是数组类型，并且先检查data是否存在
@@ -488,7 +499,7 @@ export default {
     },
 
     ltmGetUserIds() {
-      axios.get('/api/plug/alkaid/ltm/user_ids')
+      pluginExtensionApi.get('alkaid/ltm/user_ids')
         .then(response => {
           // 确保返回的数据是数组类型
           const data = response.data.data;
@@ -535,7 +546,7 @@ export default {
       this.selectedEdgeFactData = null;
       this.parsedMetadata = null;
       
-      axios.get('/api/plug/alkaid/ltm/graph/fact', { 
+      pluginExtensionApi.get('alkaid/ltm/graph/fact', { 
         params: { fact_id: factId } 
       })
         .then(response => {
@@ -1048,5 +1059,20 @@ export default {
   max-height: 150px;
   overflow: auto;
   font-size: 12px;
+}
+
+</style>
+
+<style>
+.v-theme--PurpleThemeDark #long-term-memory #graph-container {
+  background-color: rgb(var(--v-theme-background));
+}
+
+.v-theme--PurpleThemeDark #long-term-memory .d3-graph {
+  background-color: rgb(var(--v-theme-background));
+}
+
+.v-theme--PurpleThemeDark .fact-detail-card pre {
+  background-color: rgb(var(--v-theme-codeBg));
 }
 </style>

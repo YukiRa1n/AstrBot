@@ -10,9 +10,11 @@ from filelock import FileLock, Timeout
 
 from ..utils import check_astrbot_root, check_dashboard, get_astrbot_root
 
+DASHBOARD_RESET_PASSWORD_ENV = "ASTRBOT_RESET_DASHBOARD_PASSWORD"
+
 
 async def run_astrbot(astrbot_root: Path) -> None:
-    """运行 AstrBot"""
+    """Run AstrBot"""
     from astrbot.core import LogBroker, LogManager, db_helper, logger
     from astrbot.core.initial_loader import InitialLoader
 
@@ -118,8 +120,19 @@ def launch_in_new_window(
     help="在新窗口启动（仅 Windows/macOS/Linux 桌面环境）",
 )
 @click.option("--no-window", is_flag=True, hidden=True, help="内部使用：防止递归开窗口")
+@click.option(
+    "--reset-password",
+    is_flag=True,
+    help="启动时重置 Dashboard 初始密码",
+)
 @click.command()
-def run(reload: bool, port: str, new_window: bool, no_window: bool) -> None:
+def run(
+    reload: bool,
+    port: str,
+    new_window: bool,
+    no_window: bool,
+    reset_password: bool,
+) -> None:
     """运行 AstrBot（默认当前窗口）"""
     os.environ["ASTRBOT_CLI"] = "1"
     astrbot_root = get_astrbot_root()
@@ -144,16 +157,21 @@ def run(reload: bool, port: str, new_window: bool, no_window: bool) -> None:
             os.environ["DASHBOARD_PORT"] = port
 
         if reload:
-            click.echo("启用插件自动重载")
+            click.echo("Plugin auto-reload enabled")
             os.environ["ASTRBOT_RELOAD"] = "1"
+
+        if reset_password:
+            os.environ[DASHBOARD_RESET_PASSWORD_ENV] = "1"
 
         lock_file = astrbot_root / "astrbot.lock"
         lock = FileLock(lock_file, timeout=5)
         with lock.acquire():
             asyncio.run(run_astrbot(astrbot_root))
     except KeyboardInterrupt:
-        click.echo("AstrBot 已关闭...")
+        click.echo("AstrBot has been shut down.")
     except Timeout:
-        raise click.ClickException("无法获取锁文件，请检查是否有其他实例正在运行")
+        raise click.ClickException(
+            "Cannot acquire lock file. Please check if another instance is running"
+        )
     except Exception as e:
-        raise click.ClickException(f"运行时出现错误: {e}\n{traceback.format_exc()}")
+        raise click.ClickException(f"Runtime error: {e}\n{traceback.format_exc()}")

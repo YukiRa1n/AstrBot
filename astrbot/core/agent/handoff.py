@@ -61,4 +61,4 @@ class HandoffTool(FunctionTool, Generic[TContext]):
 
     def default_description(self, agent_name: str | None) -> str:
         agent_name = agent_name or "another"
-        return f"Delegate tasks to {self.name} agent to handle the request."
+        return f"Delegate tasks to {agent_name} agent to handle the request."

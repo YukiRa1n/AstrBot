@@ -1,12 +1,12 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import col, desc
 
 from astrbot.core import logger
-from astrbot.core.db.vec_db.faiss_impl import FaissVecDB
 from astrbot.core.knowledge_base.models import (
     BaseKBModel,
     KBDocument,
@@ -14,6 +14,9 @@ from astrbot.core.knowledge_base.models import (
     KnowledgeBase,
 )
 from astrbot.core.utils.astrbot_path import get_astrbot_knowledge_base_path
+
+if TYPE_CHECKING:
+    from astrbot.core.db.vec_db.faiss_impl import FaissVecDB
 
 
 class KBSQLiteDatabase:
@@ -216,25 +219,45 @@ class KBSQLiteDatabase:
         kb_id: str,
         offset: int = 0,
         limit: int = 100,
+        search: str | None = None,
     ) -> list[KBDocument]:
-        """列出知识库的所有文档"""
+        """List documents in a knowledge base.
+
+        Args:
+            kb_id: Knowledge base ID.
+            offset: Number of documents to skip.
+            limit: Maximum number of documents to return.
+            search: Optional partial match on document name; disabled when None or empty.
+
+        Returns:
+            List of matching KBDocument rows.
+        """
         async with self.get_db() as session:
+            stmt = select(KBDocument).where(col(KBDocument.kb_id) == kb_id)
+            if search:
+                stmt = stmt.where(col(KBDocument.doc_name).contains(search))
             stmt = (
-                select(KBDocument)
-                .where(col(KBDocument.kb_id) == kb_id)
-                .offset(offset)
-                .limit(limit)
-                .order_by(desc(KBDocument.created_at))
+                stmt.offset(offset).limit(limit).order_by(desc(KBDocument.created_at))
             )
             result = await session.execute(stmt)
             return list(result.scalars().all())
 
-    async def count_documents_by_kb(self, kb_id: str) -> int:
-        """统计知识库的文档数量"""
+    async def count_documents_by_kb(self, kb_id: str, search: str | None = None) -> int:
+        """Count documents in a knowledge base.
+
+        Args:
+            kb_id: Knowledge base ID.
+            search: Optional partial match on document name; disabled when None or empty.
+
+        Returns:
+            Total number of matching documents.
+        """
         async with self.get_db() as session:
             stmt = select(func.count(col(KBDocument.id))).where(
                 col(KBDocument.kb_id) == kb_id,
             )
+            if search:
+                stmt = stmt.where(col(KBDocument.doc_name).contains(search))
             result = await session.execute(stmt)
             return result.scalar() or 0
 
@@ -256,14 +279,56 @@ class KBSQLiteDatabase:
                 "knowledge_base": row[1],
             }
 
-    async def delete_document_by_id(self, doc_id: str, vec_db: FaissVecDB) -> None:
-        """删除单个文档及其相关数据"""
-        # 在知识库表中删除
+    async def get_documents_with_metadata_batch(
+        self, doc_ids: set[str]
+    ) -> dict[str, dict]:
+        """批量获取文档及其所属知识库元数据
+
+        Args:
+            doc_ids: 文档 ID 集合
+
+        Returns:
+            dict: doc_id -> {"document": KBDocument, "knowledge_base": KnowledgeBase}
+
+        """
+        if not doc_ids:
+            return {}
+
+        metadata_map: dict[str, dict] = {}
+        # SQLite 参数上限为 999，分片查询避免超限
+        chunk_size = 900
+        doc_id_list = list(doc_ids)
+
+        async with self.get_db() as session:
+            for i in range(0, len(doc_id_list), chunk_size):
+                chunk = doc_id_list[i : i + chunk_size]
+                stmt = (
+                    select(KBDocument, KnowledgeBase)
+                    .join(
+                        KnowledgeBase,
+                        col(KBDocument.kb_id) == col(KnowledgeBase.kb_id),
+                    )
+                    .where(col(KBDocument.doc_id).in_(chunk))
+                )
+                result = await session.execute(stmt)
+                for row in result.all():
+                    metadata_map[row[0].doc_id] = {
+                        "document": row[0],
+                        "knowledge_base": row[1],
+                    }
+
+        return metadata_map
+
+    async def delete_document_by_id(self, doc_id: str, vec_db: "FaissVecDB") -> None:
+        """删除单个文档及其相关数据（包括多媒体记录）"""
         async with self.get_db() as session, session.begin():
+            # 删除多媒体记录
+            delete_media_stmt = delete(KBMedia).where(col(KBMedia.doc_id) == doc_id)
+            await session.execute(delete_media_stmt)
+
             # 删除文档记录
             delete_stmt = delete(KBDocument).where(col(KBDocument.doc_id) == doc_id)
             await session.execute(delete_stmt)
-            await session.commit()
 
         # 在 vec db 中删除相关向量
         await vec_db.delete_documents(metadata_filters={"kb_doc_id": doc_id})
@@ -284,9 +349,9 @@ class KBSQLiteDatabase:
             result = await session.execute(stmt)
             return result.scalar_one_or_none()
 
-    async def update_kb_stats(self, kb_id: str, vec_db: FaissVecDB) -> None:
+    async def update_kb_stats(self, kb_id: str, vec_db: "FaissVecDB") -> None:
         """更新知识库统计信息"""
-        chunk_cnt = await vec_db.count_documents()
+        chunk_cnt = await vec_db.count_documents(metadata_filter={"kb_id": kb_id})
 
         async with self.get_db() as session, session.begin():
             update_stmt = (

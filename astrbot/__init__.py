@@ -1,5 +1,10 @@
+import logging
+
+__version__ = "4.26.8"
+
+
 def __getattr__(name: str):
-    """延迟初始化 logger，避免 CLI 客户端导入时触发 core 全量初始化"""
+    """延迟初始化 logger，避免 CLI 客户端导入时触发 core 全量初始化。"""
     if name == "logger":
         from .core.log import LogManager
 

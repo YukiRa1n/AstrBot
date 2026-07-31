@@ -49,8 +49,25 @@ export function clearSidebarCustomization() {
  * @param {boolean} [options.assembleMoreGroup=false] - 是否组装带更多分组的整体数组
  * @returns {{ mainItems: Array, moreItems: Array, merged?: Array }}
  */
+import { MORE_GROUP_KEY } from "@/layouts/full/vertical-sidebar/sidebarItem";
+
 export function resolveSidebarItems(defaultItems, customization, options = {}) {
   const { cloneItems = false, assembleMoreGroup = false } = options;
+
+  const normalizeKeys = (keys = []) => {
+    const list = Array.isArray(keys) ? keys : [];
+    const deduped = [];
+    const seen = new Set();
+
+    list.forEach((key) => {
+      if (typeof key !== 'string') return;
+      if (seen.has(key)) return;
+      seen.add(key);
+      deduped.push(key);
+    });
+
+    return deduped;
+  };
 
   const all = new Map();
   const defaultMain = [];
@@ -58,7 +75,7 @@ export function resolveSidebarItems(defaultItems, customization, options = {}) {
 
   // 收集所有条目，按 title 建索引
   defaultItems.forEach(item => {
-    if (item.children && item.title === 'core.navigation.groups.more') {
+    if (item.children && item.title === MORE_GROUP_KEY) {
       item.children.forEach(child => {
         all.set(child.title, cloneItems ? { ...child } : child);
         defaultMore.push(child.title);
@@ -70,9 +87,23 @@ export function resolveSidebarItems(defaultItems, customization, options = {}) {
   });
 
   const hasCustomization = Boolean(customization);
-  const mainKeys = hasCustomization ? customization.mainItems || [] : defaultMain;
-  const moreKeys = hasCustomization ? customization.moreItems || [] : defaultMore;
-  const used = hasCustomization ? new Set([...mainKeys, ...moreKeys]) : new Set(defaultMain.concat(defaultMore));
+  let mainKeys = hasCustomization ? normalizeKeys(customization.mainItems || []) : [...defaultMain];
+  let moreKeys = hasCustomization ? normalizeKeys(customization.moreItems || []) : [...defaultMore];
+
+  if (hasCustomization) {
+    mainKeys = mainKeys.filter(title => all.has(title));
+    moreKeys = moreKeys.filter(title => all.has(title));
+  }
+
+  if (hasCustomization) {
+    // 如果同一项同时出现在主区与更多区，主区优先。
+    const mainSet = new Set(mainKeys);
+    moreKeys = moreKeys.filter(title => !mainSet.has(title));
+  }
+
+  const used = hasCustomization
+    ? new Set([...mainKeys, ...moreKeys])
+    : new Set(defaultMain.concat(defaultMore));
 
   const mainItems = mainKeys
     .map(title => all.get(title))
@@ -109,7 +140,7 @@ export function resolveSidebarItems(defaultItems, customization, options = {}) {
       merged = [
         ...mainItems,
         {
-          title: 'core.navigation.groups.more',
+          title: MORE_GROUP_KEY,
           icon: 'mdi-dots-horizontal',
           children
         }
@@ -119,7 +150,13 @@ export function resolveSidebarItems(defaultItems, customization, options = {}) {
     }
   }
 
-  return { mainItems, moreItems, merged };
+  return {
+    mainItems,
+    moreItems,
+    merged,
+    normalizedMainKeys: [...mainKeys],
+    normalizedMoreKeys: [...moreKeys]
+  };
 }
 
 /**
@@ -129,9 +166,29 @@ export function resolveSidebarItems(defaultItems, customization, options = {}) {
  */
 export function applySidebarCustomization(defaultItems) {
   const customization = getSidebarCustomization();
-  const { merged } = resolveSidebarItems(defaultItems, customization, {
+  const {
+    merged,
+    normalizedMainKeys,
+    normalizedMoreKeys
+  } = resolveSidebarItems(defaultItems, customization, {
     cloneItems: true,
     assembleMoreGroup: true
   });
+
+  if (customization) {
+    const rawMainKeys = Array.isArray(customization.mainItems) ? customization.mainItems : [];
+    const rawMoreKeys = Array.isArray(customization.moreItems) ? customization.moreItems : [];
+    const hasChanged =
+      JSON.stringify(rawMainKeys) !== JSON.stringify(normalizedMainKeys) ||
+      JSON.stringify(rawMoreKeys) !== JSON.stringify(normalizedMoreKeys);
+
+    if (hasChanged) {
+      setSidebarCustomization({
+        mainItems: normalizedMainKeys,
+        moreItems: normalizedMoreKeys
+      });
+    }
+  }
+
   return merged || defaultItems;
 }
