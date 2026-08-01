@@ -28,7 +28,7 @@ EPILOG = """
   [发送消息]
     astr <message>                  直接发送消息（隐式调用 send）
     astr send <message>             显式发送消息给 AstrBot
-    astr send -t 60 <message>      设置超时（秒），默认 30
+    astr send -t 60 <message>      设置超时（秒），默认 120
     echo "msg" | astr               从管道读取消息
 
   [会话管理] astr conv <子命令>
@@ -116,12 +116,9 @@ class RawEpilogGroup(click.Group):
                 # astr --log ... → astr log ...
                 args = ["log"] + args[1:]
             elif first not in self.commands:
-                if first.startswith("/") and " " not in first:
-                    # 斜杠开头通常是 AstrBot 内置命令（/help /sid /new ...）。
-                    # 直接当作消息发送，让服务端解析（可能是未知命令，由服务端提示）。
-                    args = ["send"] + args
-                elif not first.startswith("-") or first in self._send_opts:
-                    # astr 你好 / astr -j "你好" → astr send ...
+                # 非子命令参数统一走 send：普通消息("你好")、旧式 -j/-t/-s 选项、
+                # 斜杠内置命令(/help)。未知命令由服务端提示。
+                if not first.startswith("-") or first in self._send_opts:
                     args = ["send"] + args
         return super().parse_args(ctx, args)
 

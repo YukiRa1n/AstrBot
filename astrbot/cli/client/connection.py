@@ -10,6 +10,13 @@ import sys
 import uuid
 
 
+def _get_source_root() -> str:
+    """源码安装根目录（通过 __file__ 向上定位）。"""
+    return os.path.realpath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../..")
+    )
+
+
 def get_data_path() -> str:
     """获取数据目录路径
 
@@ -21,11 +28,7 @@ def get_data_path() -> str:
     if root := os.environ.get("ASTRBOT_ROOT"):
         return os.path.join(root, "data")
 
-    source_root = os.path.realpath(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../..")
-    )
-    data_dir = os.path.join(source_root, "data")
-
+    data_dir = os.path.join(_get_source_root(), "data")
     if os.path.exists(data_dir):
         return data_dir
 
@@ -37,12 +40,9 @@ def get_temp_path() -> str:
     if root := os.environ.get("ASTRBOT_ROOT"):
         return os.path.join(root, "data", "temp")
 
-    source_root = os.path.realpath(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../..")
-    )
-    temp_dir = os.path.join(source_root, "data", "temp")
+    source_root = _get_source_root()
     if os.path.isdir(os.path.join(source_root, "data")):
-        return temp_dir
+        return os.path.join(source_root, "data", "temp")
 
     import tempfile
 
@@ -59,8 +59,6 @@ def load_auth_token() -> str:
     try:
         with open(token_file, encoding="utf-8") as f:
             return f.read().strip()
-    except FileNotFoundError:
-        return ""
     except Exception:
         return ""
 
@@ -213,22 +211,11 @@ def _get_connected_socket(
     return connect_to_server(fallback_info, timeout)
 
 
-def send_message(
-    message: str, socket_path: str | None = None, timeout: float = 120.0
+def _send_request(
+    request: dict, socket_path: str | None, timeout: float
 ) -> dict:
-    """发送消息到AstrBot并获取响应
-
-    Args:
-        message: 要发送的消息
-        socket_path: Unix socket路径(仅用于向后兼容)
-        timeout: 超时时间（秒）
-
-    Returns:
-        响应字典
-    """
+    """连接、发送请求并接收响应，统一处理错误。"""
     auth_token = load_auth_token()
-
-    request = {"message": message, "request_id": str(uuid.uuid4())}
     if auth_token:
         request["auth_token"] = auth_token
 
@@ -249,6 +236,23 @@ def send_message(
         return {"status": "error", "error": f"Communication error: {e}"}
     finally:
         client_socket.close()
+
+
+def send_message(
+    message: str, socket_path: str | None = None, timeout: float = 120.0
+) -> dict:
+    """发送消息到AstrBot并获取响应
+
+    Args:
+        message: 要发送的消息
+        socket_path: Unix socket路径(仅用于向后兼容)
+        timeout: 超时时间（秒）
+
+    Returns:
+        响应字典
+    """
+    request = {"message": message, "request_id": str(uuid.uuid4())}
+    return _send_request(request, socket_path, timeout)
 
 
 def get_logs(
@@ -272,36 +276,17 @@ def get_logs(
     Returns:
         响应字典
     """
-    auth_token = load_auth_token()
-
-    request = {
-        "action": "get_logs",
-        "request_id": str(uuid.uuid4()),
-        "lines": lines,
-        "level": level,
-        "pattern": pattern,
-        "regex": use_regex,
-    }
-    if auth_token:
-        request["auth_token"] = auth_token
-
-    try:
-        client_socket = _get_connected_socket(socket_path, timeout)
-    except (ValueError, ConnectionError) as e:
-        return {"status": "error", "error": str(e)}
-    except Exception as e:
-        return {"status": "error", "error": f"Connection error: {e}"}
-
-    try:
-        request_data = json.dumps(request, ensure_ascii=False).encode("utf-8")
-        client_socket.sendall(request_data)
-        return _receive_json_response(client_socket)
-    except TimeoutError:
-        return {"status": "error", "error": "Request timeout"}
-    except Exception as e:
-        return {"status": "error", "error": f"Communication error: {e}"}
-    finally:
-        client_socket.close()
+    return _send_action_request(
+        "get_logs",
+        extra_fields={
+            "lines": lines,
+            "level": level,
+            "pattern": pattern,
+            "regex": use_regex,
+        },
+        socket_path=socket_path,
+        timeout=timeout,
+    )
 
 
 def _send_action_request(
@@ -311,31 +296,10 @@ def _send_action_request(
     timeout: float = 30.0,
 ) -> dict:
     """发送 action 请求的通用方法"""
-    auth_token = load_auth_token()
-
     request: dict = {"action": action, "request_id": str(uuid.uuid4())}
-    if auth_token:
-        request["auth_token"] = auth_token
     if extra_fields:
         request.update(extra_fields)
-
-    try:
-        client_socket = _get_connected_socket(socket_path, timeout)
-    except (ValueError, ConnectionError) as e:
-        return {"status": "error", "error": str(e)}
-    except Exception as e:
-        return {"status": "error", "error": f"Connection error: {e}"}
-
-    try:
-        request_data = json.dumps(request, ensure_ascii=False).encode("utf-8")
-        client_socket.sendall(request_data)
-        return _receive_json_response(client_socket)
-    except TimeoutError:
-        return {"status": "error", "error": "Request timeout"}
-    except Exception as e:
-        return {"status": "error", "error": f"Communication error: {e}"}
-    finally:
-        client_socket.close()
+    return _send_request(request, socket_path, timeout)
 
 
 def list_tools(socket_path: str | None = None, timeout: float = 120.0) -> dict:

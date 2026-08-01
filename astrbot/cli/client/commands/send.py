@@ -26,8 +26,7 @@ def send(
       echo "你好" | astr send
     """
     if message:
-        msg = " ".join(message)
-        msg = fix_git_bash_path(msg)
+        msg = fix_git_bash_path(" ".join(message))
     elif not sys.stdin.isatty():
         msg = sys.stdin.read().strip()
     else:
