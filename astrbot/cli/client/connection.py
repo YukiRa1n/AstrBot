@@ -97,7 +97,7 @@ def load_connection_info(data_dir: str) -> dict | None:
         return None
 
 
-def connect_to_server(connection_info: dict, timeout: float = 30.0) -> socket.socket:
+def connect_to_server(connection_info: dict, timeout: float = 120.0) -> socket.socket:
     """连接到服务器
 
     根据连接信息类型选择Unix Socket或TCP Socket连接
@@ -186,7 +186,7 @@ def _receive_json_response(client_socket: socket.socket) -> dict:
 
 
 def _get_connected_socket(
-    socket_path: str | None = None, timeout: float = 30.0
+    socket_path: str | None = None, timeout: float = 120.0
 ) -> socket.socket:
     """获取已连接的 socket
 
@@ -214,7 +214,7 @@ def _get_connected_socket(
 
 
 def send_message(
-    message: str, socket_path: str | None = None, timeout: float = 30.0
+    message: str, socket_path: str | None = None, timeout: float = 120.0
 ) -> dict:
     """发送消息到AstrBot并获取响应
 
@@ -338,7 +338,7 @@ def _send_action_request(
         client_socket.close()
 
 
-def list_tools(socket_path: str | None = None, timeout: float = 30.0) -> dict:
+def list_tools(socket_path: str | None = None, timeout: float = 120.0) -> dict:
     """列出所有注册的函数工具"""
     return _send_action_request("list_tools", socket_path=socket_path, timeout=timeout)
 

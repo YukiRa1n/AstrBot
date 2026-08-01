@@ -11,7 +11,7 @@ from ..output import fix_git_bash_path, output_response
 @click.command(help="发送消息给 AstrBot")
 @click.argument("message", nargs=-1)
 @click.option("-s", "--socket", "socket_path", default=None, help="Unix socket 路径")
-@click.option("-t", "--timeout", default=30.0, type=float, help="超时时间（秒）")
+@click.option("-t", "--timeout", default=120.0, type=float, help="超时时间（秒），渲染/LLM 长任务建议 120 以上")
 @click.option("-j", "--json", "use_json", is_flag=True, help="输出原始 JSON 响应")
 def send(
     message: tuple[str, ...], socket_path: str | None, timeout: float, use_json: bool

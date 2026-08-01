@@ -116,7 +116,11 @@ class RawEpilogGroup(click.Group):
                 # astr --log ... → astr log ...
                 args = ["log"] + args[1:]
             elif first not in self.commands:
-                if not first.startswith("-") or first in self._send_opts:
+                if first.startswith("/") and " " not in first:
+                    # 斜杠开头通常是 AstrBot 内置命令（/help /sid /new ...）。
+                    # 直接当作消息发送，让服务端解析（可能是未知命令，由服务端提示）。
+                    args = ["send"] + args
+                elif not first.startswith("-") or first in self._send_opts:
                     # astr 你好 / astr -j "你好" → astr send ...
                     args = ["send"] + args
         return super().parse_args(ctx, args)
@@ -137,7 +141,7 @@ def main(ctx: click.Context) -> None:
             if message:
                 from .commands.send import do_send
 
-                do_send(message, None, 30.0, False)
+                do_send(message, None, 120.0, False)
                 return
         click.echo(ctx.get_help())
 
