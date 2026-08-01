@@ -1669,6 +1669,19 @@ async def build_main_agent(
 
     _apply_web_search_citation_prompt(event, req)
 
+    global_config = plugin_context.get_config(umo=event.unified_msg_origin) or {}
+    llm_request_log_config = {
+        "llm_request_log_enable": global_config.get(
+            "llm_request_log_enable", False
+        ),
+        "llm_request_log_path": global_config.get(
+            "llm_request_log_path", "logs/astrbot.llm.log"
+        ),
+        "llm_request_log_max_mb": global_config.get(
+            "llm_request_log_max_mb", 20
+        ),
+    }
+
     reset_coro = agent_runner.reset(
         provider=provider,
         request=req,
@@ -1695,6 +1708,7 @@ async def build_main_agent(
         read_tool=(
             req.func_tool.get_tool("astrbot_file_read_tool") if req.func_tool else None
         ),
+        llm_request_log_config=llm_request_log_config,
     )
 
     if apply_reset:

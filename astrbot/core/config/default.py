@@ -301,6 +301,9 @@ DEFAULT_CONFIG = {
     "trace_log_enable": False,
     "trace_log_path": "logs/astrbot.trace.log",
     "trace_log_max_mb": 20,
+    "llm_request_log_enable": False,
+    "llm_request_log_path": "logs/astrbot.llm.log",
+    "llm_request_log_max_mb": 20,
     "pip_install_arg": "",
     "pypi_index_url": "https://mirrors.aliyun.com/pypi/simple/",
     "persona": [],  # deprecated
@@ -4437,6 +4440,21 @@ CONFIG_METADATA_3_SYSTEM = {
                     },
                     "trace_log_max_mb": {
                         "description": "Trace 日志大小上限 (MB)",
+                        "type": "int",
+                        "hint": "超过大小后自动轮转，默认 20MB。",
+                    },
+                    "llm_request_log_enable": {
+                        "description": "启用 LLM 请求日志",
+                        "type": "bool",
+                        "hint": "开启后会将每次 LLM 请求与响应写入独立的 JSONL 日志文件，便于调试与审计。",
+                    },
+                    "llm_request_log_path": {
+                        "description": "LLM 请求日志文件路径",
+                        "type": "string",
+                        "hint": "相对路径以 data 目录为基准，例如 logs/astrbot.llm.log；支持绝对路径。",
+                    },
+                    "llm_request_log_max_mb": {
+                        "description": "LLM 请求日志大小上限 (MB)",
                         "type": "int",
                         "hint": "超过大小后自动轮转，默认 20MB。",
                     },

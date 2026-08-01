@@ -262,6 +262,20 @@ class AstrBotCoreLifecycle:
         await self.provider_manager.initialize()
         self._warn_about_unset_default_chat_provider()
 
+        # 注册 fork 的后台工具管理工具到 LLM 工具系统
+        try:
+            from astrbot.core.background_tool.register import (
+                register_background_tools,
+            )
+
+            register_background_tools(self.provider_manager.llm_tools)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Failed to register background tool management tools: %s",
+                exc,
+                exc_info=True,
+            )
+
         await self.kb_manager.initialize()
 
         # 初始化消息事件流水线调度器

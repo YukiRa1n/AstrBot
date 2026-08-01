@@ -46,6 +46,7 @@ from astrbot.core.provider.modalities import (
     sanitize_contexts_by_modalities,
 )
 from astrbot.core.provider.provider import Provider
+from astrbot.core.utils.llm_request_log import LLMRequestLogger
 
 from ..context.compressor import ContextCompressor
 from ..context.config import ContextConfig
@@ -285,6 +286,16 @@ class ToolLoopAgentRunner(BaseAgentRunner[TContext]):
         self._last_tool_name: str | None = None
         self._last_tool_args: dict[str, T.Any] | None = None
         self._same_tool_streak = 0
+
+        # Optional LLM request logger (fork feature). Configured via
+        # ``llm_request_log_config`` dict passed through reset kwargs.
+        llm_request_log_config = kwargs.get("llm_request_log_config")
+        if llm_request_log_config and llm_request_log_config.get(
+            "llm_request_log_enable", False
+        ):
+            self._llm_request_logger = LLMRequestLogger(llm_request_log_config)
+        else:
+            self._llm_request_logger = None
 
         # These two are used for tool schema mode handling
         # We now have two modes:
@@ -537,6 +548,7 @@ class ToolLoopAgentRunner(BaseAgentRunner[TContext]):
                                     break
 
                                 self._sanitize_malformed_tool_calls(resp)
+                                self._log_llm_request(candidate, resp)
                                 yield resp
                                 return
 
@@ -558,6 +570,11 @@ class ToolLoopAgentRunner(BaseAgentRunner[TContext]):
                             raise
             except Exception as exc:  # noqa: BLE001
                 last_exception = exc
+                self._log_llm_request(
+                    candidate,
+                    response=None,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
                 logger.warning(
                     "Chat Model %s request error: %s",
                     candidate_id,
@@ -567,6 +584,10 @@ class ToolLoopAgentRunner(BaseAgentRunner[TContext]):
                 continue
 
         if last_err_response:
+            self._log_llm_request(
+                self.provider,
+                response=last_err_response,
+            )
             yield last_err_response
             return
         if last_exception:
@@ -582,6 +603,43 @@ class ToolLoopAgentRunner(BaseAgentRunner[TContext]):
             role="err",
             completion_text="All available chat models are unavailable.",
         )
+
+    def _log_llm_request(
+        self,
+        provider: Provider,
+        response: LLMResponse | None,
+        error: str | None = None,
+    ) -> None:
+        """Record an LLM request/response via the fork's LLMRequestLogger.
+
+        No-op when the logger is disabled or not configured.
+        """
+        if self._llm_request_logger is None or self.req is None:
+            return
+        try:
+            if response is None:
+                response = LLMResponse(role="err", completion_text=error or "")
+            self._llm_request_logger.record(
+                provider_id=str(
+                    provider.provider_config.get("id", "<unknown>")
+                ),
+                provider_type=str(
+                    provider.provider_config.get("type", "<unknown>")
+                ),
+                model=provider.get_model() or self.req.model,
+                session_id=self.req.session_id,
+                messages=list(self.run_context.messages),
+                func_tool=self.req.func_tool,
+                extra_user_content_parts=list(self.req.extra_user_content_parts),
+                response=response,
+                error=error,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "Failed to record LLM request log: %s",
+                exc,
+                exc_info=True,
+            )
 
     def _sanitize_contexts_for_provider(
         self,
