@@ -1,131 +1,267 @@
-"""log 命令 - 获取 AstrBot 日志"""
+"""Command for reading AstrBot logs from disk or the CLI socket."""
 
 import os
 import re
+from collections import deque
+from pathlib import Path
 
 import click
 
 from ..connection import get_data_path, get_logs
+from .common import CliCommand
+
+LOG_LEVELS = {
+    "DEBUG": "DEBUG",
+    "INFO": "INFO",
+    "WARNING": "WARN",
+    "WARN": "WARN",
+    "ERROR": "ERRO",
+    "CRITICAL": "CRIT",
+}
 
 
-@click.command(help="获取 AstrBot 日志")
+@click.command(name="logs", cls=CliCommand, help="读取并筛选 AstrBot 日志。")
 @click.option(
-    "--lines", default=100, type=int, help="返回的日志行数（默认 100，最大 1000）"
+    "-n",
+    "--lines",
+    type=click.IntRange(min=1, max=1000),
+    default=100,
+    metavar="数量",
+    help="返回的日志行数，默认 100。",
 )
 @click.option(
-    "--level", default="", help="按级别过滤 (DEBUG/INFO/WARNING/ERROR/CRITICAL)"
+    "-l",
+    "--level",
+    type=click.Choice(tuple(LOG_LEVELS), case_sensitive=False),
+    metavar="级别",
+    help="按日志级别过滤。",
 )
-@click.option("--pattern", default="", help="按模式过滤（子串匹配）")
-@click.option("--regex", is_flag=True, help="使用正则表达式匹配 pattern")
+@click.option("-p", "--pattern", metavar="文本", help="按文本或正则表达式过滤。")
+@click.option("-r", "--regex", is_flag=True, help="将 --pattern 解析为正则表达式。")
 @click.option(
-    "--socket",
-    "use_socket",
-    is_flag=True,
-    help="通过 Socket 连接 AstrBot 获取日志（需要 AstrBot 运行）",
+    "--socket", "use_socket", is_flag=True, help="通过运行中的 AstrBot 获取日志。"
 )
 @click.option(
-    "-t", "--timeout", default=30.0, type=float, help="超时时间（仅 Socket 模式）"
+    "-t",
+    "--timeout",
+    type=click.FloatRange(min=0.1),
+    default=30.0,
+    metavar="秒",
+    help="Socket 模式的超时时间，默认 30 秒。",
 )
-def log(
+def logs(
     lines: int,
-    level: str,
-    pattern: str,
+    level: str | None,
+    pattern: str | None,
     regex: bool,
     use_socket: bool,
     timeout: float,
 ) -> None:
-    """获取 AstrBot 日志
-
-    \b
-    示例:
-      astr log                        # 直接读取日志文件（默认）
-      astr log --lines 50             # 获取最近 50 行
-      astr log --level ERROR          # 只显示 ERROR 级别
-      astr log --pattern "plugin"      # 匹配包含 "plugin" 的日志
-      astr log --pattern "ERRO|WARN" --regex  # 使用正则表达式
-      astr log --socket               # 通过 Socket 连接 AstrBot 获取
-    """
-    if use_socket:
-        response = get_logs(None, timeout, lines, level, pattern, regex)
-        if response.get("status") == "success":
-            formatted = response.get("response", "")
-            click.echo(formatted)
-        else:
-            error = response.get("error", "Unknown error")
-            click.echo(f"Error: {error}", err=True)
-            raise SystemExit(1)
-    else:
-        _read_log_from_file(lines, level, pattern, regex)
-
-
-def _read_log_from_file(lines: int, level: str, pattern: str, use_regex: bool) -> None:
-    """直接从日志文件读取
+    """Read and filter AstrBot logs.
 
     Args:
-        lines: 返回的日志行数
-        level: 日志级别过滤
-        pattern: 模式过滤
-        use_regex: 是否使用正则表达式
+        lines: Maximum number of matching lines.
+        level: Optional log level filter.
+        pattern: Optional text or regular expression filter.
+        regex: Whether to interpret the pattern as a regular expression.
+        use_socket: Whether to fetch logs from the running instance.
+        timeout: Socket request timeout in seconds.
+
+    Raises:
+        click.UsageError: If ``--regex`` is used without a valid pattern.
+        click.ClickException: If logs cannot be fetched or read.
     """
-    LEVEL_MAP = {
-        "DEBUG": "DEBUG",
-        "INFO": "INFO",
-        "WARNING": "WARN",
-        "WARN": "WARN",
-        "ERROR": "ERRO",
-        "CRITICAL": "CRIT",
-    }
+    if regex and not pattern:
+        raise click.UsageError("--regex 必须与 --pattern 一起使用。")
+    if regex:
+        try:
+            re.compile(pattern or "")
+        except re.error as error:
+            raise click.UsageError(f"无效的正则表达式：{error}") from error
 
-    level_filter = LEVEL_MAP.get(level.upper(), level.upper())
-
-    log_path = os.path.join(get_data_path(), "logs", "astrbot.log")
-
-    if not os.path.exists(log_path):
-        click.echo(
-            f"Error: 日志文件未找到: {log_path}",
-            err=True,
+    normalized_level = level or ""
+    normalized_pattern = pattern or ""
+    if use_socket:
+        response = get_logs(
+            None,
+            timeout,
+            lines,
+            normalized_level,
+            normalized_pattern,
+            regex,
         )
-        click.echo(
-            "提示: 请在配置中启用 log_file_enable 来记录日志到文件，或使用不带 --file 的方式连接 AstrBot",
-            err=True,
+        if response.get("status") != "success":
+            raise click.ClickException(response.get("error", "未知错误"))
+        click.echo(response.get("response") or response.get("message", ""))
+        return
+
+    _read_log_from_file(lines, normalized_level, normalized_pattern, regex)
+
+
+def _read_log_from_file(
+    lines: int,
+    level: str,
+    pattern: str,
+    use_regex: bool,
+) -> None:
+    """Read matching log lines directly from the data directory.
+
+    Args:
+        lines: Maximum number of matching lines.
+        level: Optional log level filter.
+        pattern: Optional text or regular expression filter.
+        use_regex: Whether to interpret the pattern as a regular expression.
+
+    Raises:
+        click.ClickException: If the log file is unavailable.
+    """
+    level_filter = LOG_LEVELS.get(level.upper(), level.upper())
+    log_path = Path(get_data_path()) / "logs" / "astrbot.log"
+    if not log_path.exists():
+        raise click.ClickException(
+            f"日志文件不存在：{log_path}。请启用 log_file_enable，或添加 --socket。"
         )
-        raise SystemExit(1)
 
     try:
-        with open(log_path, encoding="utf-8", errors="ignore") as f:
-            all_lines = f.readlines()
-
-        logs = []
-        for line in reversed(all_lines):
-            if not line.strip():
-                continue
-
-            if level_filter:
-                if not re.search(rf"\[{level_filter}\]", line):
+        matched_lines: deque[str] = deque(maxlen=lines)
+        with log_path.open(encoding="utf-8", errors="ignore") as source:
+            for raw_line in source:
+                line = raw_line.rstrip("\r\n")
+                if not line.strip():
                     continue
+                if level_filter and not re.search(
+                    rf"\[{re.escape(level_filter)}\]", line
+                ):
+                    continue
+                if pattern and (
+                    (use_regex and not re.search(pattern, line))
+                    or (not use_regex and pattern not in line)
+                ):
+                    continue
+                matched_lines.append(line)
+    except OSError as error:
+        raise click.ClickException(f"读取日志文件失败：{error}") from error
 
-            if pattern:
-                if use_regex:
-                    try:
-                        if not re.search(pattern, line):
-                            continue
-                    except re.error:
-                        if pattern not in line:
-                            continue
-                else:
-                    if pattern not in line:
+    for line in matched_lines:
+        click.echo(line)
+
+
+log = logs
+
+
+def _find_hl() -> str | None:
+    """Locate the hl.exe log analyzer (optional fast backend)."""
+    import shutil
+
+    candidates = [
+        os.environ.get("ASTRBOT_HL"),
+        r"C:\Users\29594\tools\hl\hl.exe",
+        shutil.which("hl"),
+        shutil.which("hl.exe"),
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
+    return None
+
+
+@click.command(
+    name="log-json",
+    cls=CliCommand,
+    help="分析 JSONL 日志（配合 hl 高性能日志工具；未装 hl 时用内置解析兜底）。",
+)
+@click.option(
+    "-n",
+    "--lines",
+    type=click.IntRange(min=1, max=10000),
+    default=50,
+    metavar="数量",
+    help="返回的最大行数，默认 50。",
+)
+@click.option(
+    "-l",
+    "--level",
+    type=click.Choice(tuple(LOG_LEVELS), case_sensitive=False),
+    metavar="级别",
+    help="按日志级别过滤（如 ERROR）。",
+)
+@click.option("-p", "--pattern", metavar="文本", help="按消息文本子串过滤。")
+@click.option(
+    "--jsonl",
+    "jsonl_path",
+    metavar="路径",
+    help="JSONL 日志路径，默认 data/logs/astrbot.jsonl。",
+)
+@click.option(
+    "--hl",
+    "hl_path",
+    metavar="路径",
+    help="hl.exe 路径（自动探测，可显式指定）。",
+)
+def log_json(
+    lines: int,
+    level: str | None,
+    pattern: str | None,
+    jsonl_path: str | None,
+    hl_path: str | None,
+) -> None:
+    """Filter and analyze the JSONL log produced by ``log_json.enable``.
+
+    Uses hl.exe (``~\\tools\\hl\\hl.exe`` or ``ASTRBOT_HL``) when present for
+    fast filtering; otherwise falls back to a Python-side parse.
+    """
+    import json as _json
+    import subprocess
+
+    log_path = Path(jsonl_path or (Path(get_data_path()) / "logs" / "astrbot.jsonl"))
+    if not log_path.exists():
+        raise click.ClickException(f"JSONL 日志不存在：{log_path}（请先开启 log_json.enable）")
+
+    resolver = hl_path or _find_hl()
+    if resolver:
+        # 快速路径：交给 hl。loguru serialize 的嵌套字段被 hl 扁平化为 record.*。
+        args = [resolver, "-P"]
+        if level:
+            args += ["-f", f"record.level.name={level.upper()}"]
+        if pattern:
+            args += ["-f", f"record.message~={pattern}"]
+        args.append(str(log_path))
+        try:
+            proc = subprocess.run(
+                args, capture_output=True, text=True, encoding="utf-8", errors="replace"
+            )
+            out = proc.stdout
+            if proc.returncode != 0 and not out:
+                raise click.ClickException(
+                    f"hl 执行失败：{proc.stderr.strip()[:200] or proc.returncode}"
+                )
+        except OSError as error:
+            raise click.ClickException(f"调用 hl 失败：{error}") from error
+        matched = [ln for ln in out.splitlines() if ln.strip()]
+    else:
+        # 兜底：纯 Python 解析 JSONL。
+        matched = []
+        level_filter = level.upper() if level else None
+        try:
+            with open(log_path, encoding="utf-8") as fh:
+                for ln in fh:
+                    ln = ln.strip()
+                    if not ln:
                         continue
+                    try:
+                        rec = _json.loads(ln).get("record", {})
+                    except ValueError:
+                        continue
+                    if level_filter and rec.get("level", {}).get("name") != level_filter:
+                        continue
+                    if pattern and pattern not in rec.get("message", ""):
+                        continue
+                    matched.append(ln)
+        except OSError as error:
+            raise click.ClickException(f"读取 JSONL 日志失败：{error}") from error
 
-            logs.append(line.rstrip())
+    for ln in matched[-lines:]:
+        click.echo(ln)
 
-            if len(logs) >= lines:
-                break
 
-        logs.reverse()
-
-        for log_line in logs:
-            click.echo(log_line)
-
-    except OSError as e:
-        click.echo(f"Error: 读取日志文件失败: {e}", err=True)
-        raise SystemExit(1)
+__all__ = ["log", "log_json", "logs"]

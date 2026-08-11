@@ -1,7 +1,6 @@
-"""跨会话浏览命令组 - astr session"""
+"""Commands for browsing conversations across platform sessions."""
 
 import json
-import sys
 
 import click
 
@@ -10,114 +9,189 @@ from ..connection import (
     list_session_conversations,
     list_sessions,
 )
+from ..output import output_response
+from .common import CliCommand, CliGroup, json_option
 
 
-@click.group(help="跨会话浏览 — 查看任意平台的会话和聊天记录 (ls/convs/history)")
+@click.group(
+    cls=CliGroup,
+    aliases={"ls": "list", "convs": "conversations"},
+    help="跨平台浏览会话、对话和聊天记录。",
+)
 def session() -> None:
-    """跨会话浏览命令组"""
+    """Browse sessions across all configured platforms."""
 
 
-@session.command(name="ls", help="列出所有会话（跨平台：QQ/TG/微信/CLI…）")
-@click.option("--page", "-p", type=int, default=1, help="页码 (默认 1)")
-@click.option("--size", "-s", type=int, default=20, help="每页数量 (默认 20)")
-@click.option("--platform", "-P", type=str, default=None, help="按平台过滤")
-@click.option("--search", "-q", type=str, default=None, help="搜索关键词")
-@click.option("-j", "--json-output", "use_json", is_flag=True, help="输出原始 JSON")
-def session_ls(
-    page: int, size: int, platform: str | None, search: str | None, use_json: bool
+@session.command(name="list", cls=CliCommand, help="列出所有平台会话。")
+@click.option(
+    "-p",
+    "--page",
+    type=click.IntRange(min=1),
+    default=1,
+    metavar="页码",
+    help="结果页码，默认 1。",
+)
+@click.option(
+    "-s",
+    "--size",
+    type=click.IntRange(min=1),
+    default=20,
+    metavar="数量",
+    help="每页数量，默认 20。",
+)
+@click.option("-P", "--platform", type=str, metavar="平台", help="按平台过滤。")
+@click.option("-q", "--search", type=str, metavar="关键词", help="按关键词搜索。")
+@json_option
+def session_list(
+    page: int,
+    size: int,
+    platform: str | None,
+    search: str | None,
+    use_json: bool,
 ) -> None:
-    """列出所有会话"""
-    resp = list_sessions(
+    """List sessions across platforms.
+
+    Args:
+        page: Result page number.
+        size: Number of sessions per page.
+        platform: Optional platform filter.
+        search: Optional keyword filter.
+        use_json: Whether to emit the raw JSON response.
+    """
+    response = list_sessions(
         page=page,
         page_size=size,
         platform=platform,
         search_query=search,
     )
-
-    if resp.get("status") != "success":
-        click.echo(f"[ERROR] {resp.get('error', 'Unknown error')}", err=True)
-        sys.exit(1)
+    if response.get("status") != "success":
+        output_response(response, use_json)
 
     if use_json:
-        click.echo(json.dumps(resp, ensure_ascii=False, indent=2))
+        click.echo(json.dumps(response, ensure_ascii=False, indent=2))
         return
 
-    sessions = resp.get("sessions", [])
+    sessions = response.get("sessions", [])
     if not sessions:
         click.echo("没有找到会话。")
         return
 
     click.echo(f"{'#':<4} {'会话 ID':<45} {'当前对话标题':<20} {'人设'}")
     click.echo("-" * 90)
-    for i, s in enumerate(sessions, start=(page - 1) * size + 1):
-        sid = s.get("session_id", "?")
-        title = s.get("title") or "(无标题)"
-        persona = s.get("persona_name") or "-"
-        # 截断过长的字段
-        if len(sid) > 43:
-            sid = sid[:40] + "..."
+    for index, item in enumerate(sessions, start=(page - 1) * size + 1):
+        session_id = item.get("session_id", "?")
+        title = item.get("title") or "(无标题)"
+        persona = item.get("persona_name") or "-"
+        if len(session_id) > 43:
+            session_id = session_id[:40] + "..."
         if len(title) > 18:
             title = title[:15] + "..."
-        click.echo(f"{i:<4} {sid:<45} {title:<20} {persona}")
+        click.echo(f"{index:<4} {session_id:<45} {title:<20} {persona}")
 
-    total = resp.get("total", 0)
-    total_pages = resp.get("total_pages", 0)
+    total = response.get("total", 0)
+    total_pages = response.get("total_pages", 0)
     click.echo(f"\n共 {total} 个会话，第 {page}/{total_pages} 页")
 
 
-@session.command(name="convs", help="查看指定会话下的对话列表")
-@click.argument("session_id")
-@click.option("--page", "-p", type=int, default=1, help="页码 (默认 1)")
-@click.option("--size", "-s", type=int, default=20, help="每页数量 (默认 20)")
-@click.option("-j", "--json-output", "use_json", is_flag=True, help="输出原始 JSON")
-def session_convs(session_id: str, page: int, size: int, use_json: bool) -> None:
-    """查看指定会话的对话列表"""
-    resp = list_session_conversations(
+@session.command(
+    name="conversations",
+    cls=CliCommand,
+    help="列出指定会话中的对话。",
+)
+@click.argument("session_id", metavar="会话ID")
+@click.option(
+    "-p",
+    "--page",
+    type=click.IntRange(min=1),
+    default=1,
+    metavar="页码",
+    help="结果页码，默认 1。",
+)
+@click.option(
+    "-s",
+    "--size",
+    type=click.IntRange(min=1),
+    default=20,
+    metavar="数量",
+    help="每页数量，默认 20。",
+)
+@json_option
+def session_conversations(
+    session_id: str,
+    page: int,
+    size: int,
+    use_json: bool,
+) -> None:
+    """List conversations belonging to a session.
+
+    Args:
+        session_id: Platform session identifier.
+        page: Result page number.
+        size: Number of conversations per page.
+        use_json: Whether to emit the raw JSON response.
+    """
+    response = list_session_conversations(
         session_id=session_id,
         page=page,
         page_size=size,
     )
-
-    if resp.get("status") != "success":
-        click.echo(f"[ERROR] {resp.get('error', 'Unknown error')}", err=True)
-        sys.exit(1)
+    if response.get("status") != "success":
+        output_response(response, use_json)
 
     if use_json:
-        click.echo(json.dumps(resp, ensure_ascii=False, indent=2))
+        click.echo(json.dumps(response, ensure_ascii=False, indent=2))
         return
 
-    convs = resp.get("conversations", [])
-    if not convs:
+    conversations = response.get("conversations", [])
+    if not conversations:
         click.echo(f"会话 {session_id} 没有对话。")
         return
 
     click.echo(f"会话: {session_id}")
-    click.echo(f"当前对话: {resp.get('current_cid', '无')}")
-    click.echo("")
+    click.echo(f"当前对话: {response.get('current_cid', '无')}\n")
     click.echo(f"{'#':<4} {'对话 ID':<38} {'标题':<20} {'Token':<8} {'当前'}")
     click.echo("-" * 80)
-    for i, c in enumerate(convs, start=(page - 1) * size + 1):
-        cid = c.get("cid", "?")
-        title = c.get("title") or "(无标题)"
-        token = c.get("token_usage", 0)
-        is_curr = "*" if c.get("is_current") else ""
+    for index, item in enumerate(conversations, start=(page - 1) * size + 1):
+        conversation_id = item.get("cid", "?")
+        title = item.get("title") or "(无标题)"
         if len(title) > 18:
             title = title[:15] + "..."
-        click.echo(f"{i:<4} {cid:<38} {title:<20} {token:<8} {is_curr}")
+        token_usage = item.get("token_usage", 0)
+        current = "*" if item.get("is_current") else ""
+        click.echo(
+            f"{index:<4} {conversation_id:<38} {title:<20} {token_usage:<8} {current}"
+        )
 
-    total = resp.get("total", 0)
-    total_pages = resp.get("total_pages", 0)
+    total = response.get("total", 0)
+    total_pages = response.get("total_pages", 0)
     click.echo(f"\n共 {total} 个对话，第 {page}/{total_pages} 页")
 
 
-@session.command(name="history", help="查看聊天记录（用户/AI 交替显示）")
-@click.argument("session_id")
+@session.command(name="history", cls=CliCommand, help="查看指定会话的聊天记录。")
+@click.argument("session_id", metavar="会话ID")
 @click.option(
-    "-c", "--conversation-id", type=str, default=None, help="对话 ID (默认当前对话)"
+    "-c",
+    "--conversation-id",
+    metavar="对话ID",
+    help="对话 ID；默认使用当前对话。",
 )
-@click.option("--page", "-p", type=int, default=1, help="页码 (默认 1)")
-@click.option("--size", "-s", type=int, default=10, help="每页数量 (默认 10)")
-@click.option("-j", "--json-output", "use_json", is_flag=True, help="输出原始 JSON")
+@click.option(
+    "-p",
+    "--page",
+    type=click.IntRange(min=1),
+    default=1,
+    metavar="页码",
+    help="结果页码，默认 1。",
+)
+@click.option(
+    "-s",
+    "--size",
+    type=click.IntRange(min=1),
+    default=10,
+    metavar="数量",
+    help="每页数量，默认 10。",
+)
+@json_option
 def session_history(
     session_id: str,
     conversation_id: str | None,
@@ -125,47 +199,68 @@ def session_history(
     size: int,
     use_json: bool,
 ) -> None:
-    """查看指定会话的聊天记录"""
-    resp = get_session_history(
+    """Show message history for a platform session.
+
+    Args:
+        session_id: Platform session identifier.
+        conversation_id: Optional conversation identifier.
+        page: Result page number.
+        size: Number of messages per page.
+        use_json: Whether to emit the raw JSON response.
+    """
+    response = get_session_history(
         session_id=session_id,
         conversation_id=conversation_id,
         page=page,
         page_size=size,
     )
-
-    if resp.get("status") != "success":
-        click.echo(f"[ERROR] {resp.get('error', 'Unknown error')}", err=True)
-        sys.exit(1)
+    if response.get("status") != "success":
+        output_response(response, use_json)
 
     if use_json:
-        click.echo(json.dumps(resp, ensure_ascii=False, indent=2))
+        click.echo(json.dumps(response, ensure_ascii=False, indent=2))
         return
 
-    _render_history(resp, session_id, page)
+    _render_history(response, session_id, page)
 
 
-def _render_history(resp: dict, session_id: str, page: int) -> None:
-    """简洁地渲染聊天记录：用户/AI 交替显示。"""
-    history = resp.get("history", [])
-    total_pages = resp.get("total_pages", 0)
-    cid = resp.get("conversation_id")
+def _render_history(response: dict, session_id: str, page: int) -> None:
+    """Render alternating user and assistant messages.
+
+    Args:
+        response: Successful session history response.
+        session_id: Platform session identifier.
+        page: Current result page number.
+    """
+    history = response.get("history", [])
+    total_pages = response.get("total_pages", 0)
+    conversation_id = response.get("conversation_id")
 
     click.echo(f"会话: {session_id}")
-    click.echo(f"对话: {cid or '(无)'}  页码: {page}/{total_pages}")
+    click.echo(f"对话: {conversation_id or '(无)'}  页码: {page}/{total_pages}")
     click.echo("-" * 60)
-
     if not history:
         click.echo("(无聊天记录)")
         return
 
-    for msg in history:
-        # 新格式：msg 是 {"role": "user"|"assistant", "text": "..."}
-        if isinstance(msg, dict):
-            role = msg.get("role", "?")
-            text = msg.get("text", "")
+    for message in history:
+        if isinstance(message, dict):
+            role = message.get("role", "?")
             label = "You" if role == "user" else "AI"
-            click.echo(f"{label}: {text}")
+            click.echo(f"{label}: {message.get('text', '')}")
         else:
-            # 兼容旧格式（纯字符串）
-            click.echo(msg)
+            click.echo(message)
         click.echo()
+
+
+session_ls = session_list
+session_convs = session_conversations
+
+__all__ = [
+    "session",
+    "session_conversations",
+    "session_convs",
+    "session_history",
+    "session_list",
+    "session_ls",
+]

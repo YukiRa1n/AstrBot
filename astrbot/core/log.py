@@ -194,6 +194,7 @@ class LogManager:
     _console_sink_id: int | None = None
     _file_sink_id: int | None = None
     _trace_sink_id: int | None = None
+    _json_sink_id: int | None = None
     _plugin_logger_names: set[str] = set()
     _plugin_level_overrides: dict[str, str] | None = None
     _log_broker: "LogBroker | None" = None
@@ -223,10 +224,12 @@ class LogManager:
             return
 
         _loguru.remove()
+        # enqueue=True: 控制台异步写出，大量日志不阻塞主线程（修复高负载下卡顿）。
         cls._console_sink_id = _loguru.add(
             sys.stdout,
             level="DEBUG",
             colorize=True,
+            enqueue=True,
             filter=lambda record: not record["extra"].get("is_trace", False),
             format=(
                 "<green>[{time:HH:mm:ss.SSS}]</green> {extra[plugin_tag]} "
@@ -483,6 +486,39 @@ class LogManager:
         )
 
     @classmethod
+    def _add_json_file_sink(
+        cls,
+        *,
+        file_path: str,
+        level: int,
+        max_mb: int | None,
+        backup_count: int,
+    ) -> int:
+        """JSONL 文件 sink：每行一个 JSON 记录，可用 hl 等工具秒级分析。
+
+        loguru serialize=True 输出结构化 JSON，含 time/level/message/extra 字段。
+        配合本仓库集成的 hl: hl -P -f 'level=ERROR' logs/astrbot.jsonl
+        """
+        os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
+        rotation = f"{max_mb} MB" if max_mb and max_mb > 0 else None
+        retention = (
+            backup_count if rotation and backup_count and backup_count > 0 else None
+        )
+        logging_level_name = logging.getLevelName(level)
+        if isinstance(logging_level_name, int):
+            logging_level_name = "INFO"
+        return _loguru.add(
+            file_path,
+            level=logging_level_name,
+            serialize=True,
+            encoding="utf-8",
+            rotation=rotation,
+            retention=retention,
+            enqueue=True,
+            filter=lambda record: not record["extra"].get("is_trace", False),
+        )
+
+    @classmethod
     def configure_logger(
         cls,
         logger: logging.Logger,
@@ -517,6 +553,28 @@ class LogManager:
             enable_file = bool(config.get("log_file_enable", False))
             file_path = config.get("log_file_path")
             max_mb = config.get("log_file_max_mb")
+
+        # JSONL 日志（hl 可分析）。配置项: log_json.enable / log_json.path / log_json.max_mb
+        json_conf = config.get("log_json") if isinstance(config, dict) else None
+        if not isinstance(json_conf, dict):
+            json_conf = {}
+        enable_json = bool(json_conf.get("enable", False))
+        json_path = json_conf.get("path") or "logs/astrbot.jsonl"
+        json_max_mb = json_conf.get("max_mb") or 50
+
+        cls._remove_sink(cls._json_sink_id)
+        cls._json_sink_id = None
+
+        if enable_json:
+            try:
+                cls._json_sink_id = cls._add_json_file_sink(
+                    file_path=cls._resolve_log_path(json_path),
+                    level=logger.level,
+                    max_mb=json_max_mb,
+                    backup_count=3,
+                )
+            except Exception as e:
+                logger.error(f"Failed to add JSON file sink: {e}")
 
         cls._remove_sink(cls._file_sink_id)
         cls._file_sink_id = None

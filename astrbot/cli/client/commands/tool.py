@@ -1,30 +1,40 @@
-"""函数工具管理命令组 - astr tool"""
+"""Commands for inspecting and calling registered function tools."""
 
 import json
-import sys
 
 import click
 
 from ..connection import call_tool, list_tools
+from ..output import output_response
+from .common import CliCommand, CliGroup, json_option
 
 
-@click.group(help="函数工具管理 (子命令: ls/info/call)")
+@click.group(cls=CliGroup, aliases={"ls": "list"}, help="查看和调用已注册的函数工具。")
 def tool() -> None:
-    """函数工具管理命令组"""
+    """Inspect and call registered function tools."""
 
 
-@tool.command(name="ls", help="列出所有注册的函数工具")
+@tool.command(name="list", cls=CliCommand, help="列出所有注册的函数工具。")
 @click.option(
-    "--origin", "-o", type=str, default="", help="按来源过滤: plugin/mcp/builtin"
+    "-o",
+    "--origin",
+    type=str,
+    default="",
+    metavar="来源",
+    help="按来源过滤：plugin/mcp/builtin。",
 )
-@click.option("-j", "--json-output", "use_json", is_flag=True, help="输出原始 JSON")
-def tool_ls(origin: str, use_json: bool) -> None:
-    """列出所有注册的函数工具"""
+@json_option
+def tool_list(origin: str, use_json: bool) -> None:
+    """List registered tools.
+
+    Args:
+        origin: Optional tool origin filter.
+        use_json: Whether to emit the raw JSON response.
+    """
     resp = list_tools()
 
     if resp.get("status") != "success":
-        click.echo(f"[ERROR] {resp.get('error', 'Unknown error')}", err=True)
-        sys.exit(1)
+        output_response(resp, use_json)
 
     tools = resp.get("tools", [])
     if not tools:
@@ -43,7 +53,9 @@ def tool_ls(origin: str, use_json: bool) -> None:
         ]
 
     if use_json:
-        click.echo(json.dumps(tools, ensure_ascii=False, indent=2))
+        json_response = {**resp, "tools": tools}
+        json_response["response"] = json.dumps(tools, ensure_ascii=False)
+        output_response(json_response, True)
         return
 
     if not tools:
@@ -63,15 +75,18 @@ def tool_ls(origin: str, use_json: bool) -> None:
     click.echo(f"\n共 {len(tools)} 个工具")
 
 
-@tool.command(name="info", help="查看工具详细信息")
-@click.argument("name")
+@tool.command(name="info", cls=CliCommand, help="查看工具详细信息。")
+@click.argument("name", metavar="工具名")
 def tool_info(name: str) -> None:
-    """查看工具详细信息"""
+    """Show details for one tool.
+
+    Args:
+        name: Registered tool name.
+    """
     resp = list_tools()
 
     if resp.get("status") != "success":
-        click.echo(f"[ERROR] {resp.get('error', 'Unknown error')}", err=True)
-        sys.exit(1)
+        raise click.ClickException(resp.get("error", "未知错误"))
 
     tools = resp.get("tools", [])
     if not tools:
@@ -84,8 +99,7 @@ def tool_info(name: str) -> None:
 
     matched = [t for t in tools if t.get("name") == name]
     if not matched:
-        click.echo(f"未找到工具: {name}")
-        sys.exit(1)
+        raise click.ClickException(f"未找到工具: {name}")
 
     t = matched[0]
     click.echo(f"名称:     {t.get('name')}")
@@ -105,29 +119,41 @@ def tool_info(name: str) -> None:
             click.echo(f"  {req_mark} {pname} ({ptype}): {pdesc}")
 
 
-@tool.command(name="call", help="调用指定的函数工具")
-@click.argument("name")
-@click.argument("args_json", required=False, default="{}")
-@click.option("-t", "--timeout", type=float, default=60.0, help="超时时间（秒）")
+@tool.command(name="call", cls=CliCommand, help="调用指定的函数工具。")
+@click.argument("name", metavar="工具名")
+@click.argument("args_json", required=False, default="{}", metavar="[参数JSON]")
+@click.option(
+    "-t",
+    "--timeout",
+    type=click.FloatRange(min=0.1),
+    default=60.0,
+    metavar="秒",
+    help="超时时间，默认 60 秒。",
+)
 def tool_call(name: str, args_json: str, timeout: float) -> None:
-    """调用指定的函数工具
+    """Call a registered function tool.
 
-    ARGS_JSON: JSON 格式的参数，例如 '{"key": "value"}'
+    Args:
+        name: Registered tool name.
+        args_json: Tool arguments encoded as a JSON object.
+        timeout: Request timeout in seconds.
     """
     try:
         tool_args = json.loads(args_json)
     except json.JSONDecodeError as e:
-        click.echo(f"[ERROR] 参数 JSON 格式错误: {e}", err=True)
-        sys.exit(1)
+        raise click.ClickException(f"参数 JSON 格式错误: {e}") from e
 
     if not isinstance(tool_args, dict):
-        click.echo("[ERROR] 参数必须是 JSON 对象", err=True)
-        sys.exit(1)
+        raise click.ClickException("参数必须是 JSON 对象")
 
     resp = call_tool(name, tool_args, timeout=timeout)
 
     if resp.get("status") != "success":
-        click.echo(f"[ERROR] {resp.get('error', 'Unknown error')}", err=True)
-        sys.exit(1)
+        raise click.ClickException(resp.get("error", "未知错误"))
 
     click.echo(resp.get("response", "(无返回值)"))
+
+
+tool_ls = tool_list
+
+__all__ = ["tool", "tool_call", "tool_info", "tool_list", "tool_ls"]

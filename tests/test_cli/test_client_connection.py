@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from astrbot.cli.client.connection import (
+    _get_connected_socket,
     _receive_json_response,
     connect_to_server,
     get_data_path,
@@ -40,6 +41,14 @@ class TestGetDataPath:
             os.environ.pop("ASTRBOT_ROOT", None)
             result = get_data_path()
             assert os.path.basename(result) == "data"
+
+    def test_current_instance_precedes_source_root(self, tmp_path, monkeypatch):
+        """当前工作目录中的实例优先于客户端源码目录。"""
+        (tmp_path / "data").mkdir()
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("ASTRBOT_ROOT", raising=False)
+
+        assert get_data_path() == str(tmp_path / "data")
 
 
 class TestGetTempPath:
@@ -145,6 +154,46 @@ class TestConnectToServer:
         """TCP 缺少 port 抛出 ValueError"""
         with pytest.raises(ValueError, match="host or port is missing"):
             connect_to_server({"type": "tcp", "host": "127.0.0.1"})
+
+    @patch("astrbot.cli.client.connection.socket.socket")
+    def test_failed_connection_closes_socket(self, mock_socket_factory):
+        """连接失败时释放已创建的 socket。"""
+        mock_socket = MagicMock()
+        mock_socket.connect.side_effect = ConnectionRefusedError()
+        mock_socket_factory.return_value = mock_socket
+
+        with pytest.raises(ConnectionError, match="Connection refused"):
+            connect_to_server(
+                {"type": "tcp", "host": "127.0.0.1", "port": 65535}
+            )
+
+        mock_socket.close.assert_called_once()
+
+
+class TestConnectedSocketSelection:
+    """连接配置选择测试。"""
+
+    @patch("astrbot.cli.client.connection.connect_to_server")
+    @patch(
+        "astrbot.cli.client.connection.load_connection_info",
+        return_value={"type": "tcp", "host": "127.0.0.1", "port": 1234},
+    )
+    def test_explicit_socket_overrides_connection_file(
+        self,
+        mock_load_connection,
+        mock_connect,
+    ):
+        """显式 --socket 不应被连接文件覆盖。"""
+        expected_socket = MagicMock()
+        mock_connect.return_value = expected_socket
+
+        result = _get_connected_socket("/tmp/override.sock", 9.0)
+
+        assert result is expected_socket
+        mock_load_connection.assert_not_called()
+        mock_connect.assert_called_once_with(
+            {"type": "unix", "path": "/tmp/override.sock"}, 9.0
+        )
 
 
 class TestReceiveJsonResponse:

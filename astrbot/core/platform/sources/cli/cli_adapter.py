@@ -3,13 +3,15 @@
 编排层：组合各模块实现CLI测试功能。
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import os
 import secrets
 import time
 from collections.abc import Awaitable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from astrbot import logger
 from astrbot.core.message.message_event_result import MessageChain
@@ -20,12 +22,16 @@ from astrbot.core.utils.astrbot_path import get_astrbot_data_path, get_astrbot_t
 from ...register import register_platform_adapter
 from .cli_event import MessageConverter
 from .file_handler import FileHandler
+from .plugin_control import PluginController
 from .socket_handler import (
     SocketClientHandler,
     SocketModeHandler,
     write_connection_info,
 )
 from .socket_server import create_socket_server, detect_platform
+
+if TYPE_CHECKING:
+    from astrbot.core.star.star_manager import PluginManager
 
 # ------------------------------------------------------------------
 # Token管理
@@ -261,8 +267,13 @@ class CLIPlatformAdapter(Platform):
         self._running = False
         self._output_queue: asyncio.Queue = asyncio.Queue()
         self._handler = None
+        self._plugin_controller: PluginController | None = None
 
         logger.info(f"[CLI] Adapter initialized, mode={self.mode}")
+
+    def bind_plugin_manager(self, plugin_manager: PluginManager) -> None:
+        """Bind runtime plugin operations before the adapter starts."""
+        self._plugin_controller = PluginController(plugin_manager)
 
     def run(self) -> Awaitable[Any]:
         return self._run_loop()
@@ -304,6 +315,7 @@ class CLIPlatformAdapter(Platform):
             event_committer=self.commit_event,
             use_isolated_sessions=self.use_isolated_sessions,
             data_path=get_astrbot_data_path(),
+            plugin_controller=self._plugin_controller,
         )
 
         self._handler = SocketModeHandler(

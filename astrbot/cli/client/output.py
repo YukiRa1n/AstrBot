@@ -65,15 +65,32 @@ def fix_git_bash_path(message: str) -> str:
     return message
 
 
-def output_response(response: dict, use_json: bool) -> None:
+def output_response(
+    response: dict,
+    use_json: bool,
+    *,
+    compact_json: bool = False,
+) -> None:
     """统一输出响应
 
     Args:
         response: 响应字典
         use_json: 是否输出原始JSON
+        compact_json: 是否将 JSON 压缩为单行输出
     """
     if use_json:
-        click.echo(json.dumps(response, ensure_ascii=False, indent=2))
+        indent = None if compact_json else 2
+        separators = (",", ":") if compact_json else None
+        click.echo(
+            json.dumps(
+                response,
+                ensure_ascii=False,
+                indent=indent,
+                separators=separators,
+            )
+        )
+        if response.get("status") != "success":
+            raise SystemExit(1)
     else:
         if response.get("status") == "success":
             formatted = format_response(response)

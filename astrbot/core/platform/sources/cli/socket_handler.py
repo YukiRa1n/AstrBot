@@ -10,16 +10,38 @@ import re
 import tempfile
 import traceback
 import uuid
+from collections import deque
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
-from astrbot import logger
+import mcp
+
+from astrbot import __version__, logger
 from astrbot.core.message.message_event_result import MessageChain
+
+CLI_PROTOCOL_VERSION = 2
+BASE_CAPABILITIES = (
+    "get_capabilities",
+    "ping",
+    "get_logs",
+    "list_tools",
+    "call_tool",
+    "list_sessions",
+    "list_session_conversations",
+    "get_session_history",
+)
+PLUGIN_CAPABILITIES = (
+    "list_plugins",
+    "set_plugin_enabled",
+    "reload_plugin",
+)
 
 if TYPE_CHECKING:
     from astrbot.core.platform.platform_metadata import PlatformMetadata
 
     from .cli_event import CLIMessageEvent
+    from .plugin_control import PluginController
 
 
 # ------------------------------------------------------------------
@@ -102,6 +124,22 @@ def _build_error_response(
     return json.dumps(result, ensure_ascii=False)
 
 
+def _build_action_response(
+    response: str,
+    request_id: str,
+    **extra: Any,
+) -> str:
+    """Build a successful response for a non-message socket action."""
+    result: dict[str, Any] = {
+        "status": "success",
+        "response": response,
+        "images": [],
+        "request_id": request_id,
+    }
+    result.update(extra)
+    return json.dumps(result, ensure_ascii=False)
+
+
 # ------------------------------------------------------------------
 # Socket客户端处理器
 # ------------------------------------------------------------------
@@ -124,6 +162,7 @@ class SocketClientHandler:
         event_committer: Callable[["CLIMessageEvent"], None],
         use_isolated_sessions: bool = False,
         data_path: str | None = None,
+        plugin_controller: "PluginController | None" = None,
     ):
         self.token_manager = token_manager
         self.message_converter = message_converter
@@ -133,6 +172,7 @@ class SocketClientHandler:
         self.event_committer = event_committer
         self.use_isolated_sessions = use_isolated_sessions
         self.data_path = data_path or os.path.join(os.getcwd(), "data")
+        self.plugin_controller = plugin_controller
 
     async def handle(self, client_socket) -> None:
         """处理单个客户端连接"""
@@ -167,7 +207,16 @@ class SocketClientHandler:
                 )
                 return
 
-            if action == "get_logs":
+            if action == "get_capabilities":
+                response = self._get_capabilities(request_id)
+            elif action == "ping":
+                response = _build_action_response(
+                    "pong",
+                    request_id,
+                    protocol_version=CLI_PROTOCOL_VERSION,
+                    astrbot_version=__version__,
+                )
+            elif action == "get_logs":
                 response = await self._get_logs(request, request_id)
             elif action == "list_tools":
                 response = self._list_tools(request_id)
@@ -179,6 +228,18 @@ class SocketClientHandler:
                 response = await self._list_session_conversations(request, request_id)
             elif action == "get_session_history":
                 response = await self._get_session_history(request, request_id)
+            elif action == "list_plugins":
+                response = self._list_plugins(request_id)
+            elif action == "set_plugin_enabled":
+                response = await self._set_plugin_enabled(request, request_id)
+            elif action == "reload_plugin":
+                response = await self._reload_plugin(request, request_id)
+            elif action:
+                response = _build_error_response(
+                    f"Unsupported CLI action: {action}",
+                    request_id,
+                    "UNKNOWN_ACTION",
+                )
             else:
                 message_text = request.get("message", "")
                 response = await self._process_message(message_text, request_id)
@@ -259,6 +320,94 @@ class SocketClientHandler:
         except asyncio.TimeoutError:
             return _build_error_response("Request timeout", request_id, "TIMEOUT")
 
+    def _get_capabilities(self, request_id: str) -> str:
+        """Return the socket protocol version and supported actions."""
+        capabilities = list(BASE_CAPABILITIES)
+        if self.plugin_controller is not None:
+            capabilities.extend(PLUGIN_CAPABILITIES)
+        return _build_action_response(
+            "CLI capabilities retrieved",
+            request_id,
+            protocol_version=CLI_PROTOCOL_VERSION,
+            astrbot_version=__version__,
+            capabilities=capabilities,
+        )
+
+    def _list_plugins(self, request_id: str) -> str:
+        """List runtime plugins through the bound plugin controller."""
+        if self.plugin_controller is None:
+            return _build_error_response(
+                "Runtime plugin control is unavailable",
+                request_id,
+                "UNSUPPORTED_ACTION",
+            )
+        plugins = self.plugin_controller.list_plugins()
+        return _build_action_response(
+            f"共 {len(plugins)} 个插件",
+            request_id,
+            plugins=plugins,
+        )
+
+    async def _set_plugin_enabled(self, request: dict, request_id: str) -> str:
+        """Enable or disable one runtime plugin."""
+        if self.plugin_controller is None:
+            return _build_error_response(
+                "Runtime plugin control is unavailable",
+                request_id,
+                "UNSUPPORTED_ACTION",
+            )
+        plugin = request.get("plugin")
+        enabled = request.get("enabled")
+        if not isinstance(plugin, str) or not plugin.strip():
+            return _build_error_response("缺少 plugin 参数", request_id)
+        if not isinstance(enabled, bool):
+            return _build_error_response("enabled 必须是布尔值", request_id)
+
+        try:
+            result = await self.plugin_controller.set_enabled(
+                plugin,
+                enabled=enabled,
+            )
+        except Exception as error:
+            logger.warning("[CLI] Failed to change plugin state: %s", error)
+            return _build_error_response(str(error), request_id)
+        action = "启用" if enabled else "禁用"
+        return _build_action_response(
+            f"插件 {result['name']} {action}成功",
+            request_id,
+            plugin=result,
+        )
+
+    async def _reload_plugin(self, request: dict, request_id: str) -> str:
+        """Reload one plugin or explicitly reload all plugins."""
+        if self.plugin_controller is None:
+            return _build_error_response(
+                "Runtime plugin control is unavailable",
+                request_id,
+                "UNSUPPORTED_ACTION",
+            )
+        plugin = request.get("plugin")
+        reload_all = request.get("reload_all", False)
+        if plugin is not None and not isinstance(plugin, str):
+            return _build_error_response("plugin 必须是字符串", request_id)
+        if not isinstance(reload_all, bool):
+            return _build_error_response("reload_all 必须是布尔值", request_id)
+
+        try:
+            result = await self.plugin_controller.reload(
+                plugin,
+                reload_all=reload_all,
+            )
+        except Exception as error:
+            logger.warning("[CLI] Failed to reload plugin: %s", error)
+            return _build_error_response(str(error), request_id)
+        label = "全部插件" if reload_all else f"插件 {result['plugin']}"
+        return _build_action_response(
+            f"{label}重载成功",
+            request_id,
+            reload=result,
+        )
+
     async def _get_logs(self, request: dict, request_id: str) -> str:
         """获取日志"""
         LEVEL_MAP = {
@@ -271,7 +420,12 @@ class SocketClientHandler:
         }
 
         try:
-            lines = min(request.get("lines", 100), 1000)
+            try:
+                lines = max(1, min(int(request.get("lines", 100)), 1000))
+            except (TypeError, ValueError):
+                return _build_error_response(
+                    "lines 必须是 1 到 1000 之间的整数", request_id
+                )
             level_filter = request.get("level", "").upper()
             level_filter = LEVEL_MAP.get(level_filter, level_filter)
             pattern = request.get("pattern", "")
@@ -290,37 +444,34 @@ class SocketClientHandler:
                     ensure_ascii=False,
                 )
 
-            logs = []
+            logs: deque[str] = deque(maxlen=lines)
             try:
                 with open(log_path, encoding="utf-8", errors="ignore") as f:
-                    all_lines = f.readlines()
-
-                for line in reversed(all_lines):
-                    if not line.strip():
-                        continue
-                    if level_filter and not re.search(rf"\[{level_filter}\]", line):
-                        continue
-                    if pattern:
-                        if use_regex:
-                            try:
-                                if not re.search(pattern, line):
-                                    continue
-                            except re.error:
-                                if pattern not in line:
-                                    continue
-                        else:
-                            if pattern not in line:
+                    for raw_line in f:
+                        line = raw_line.rstrip("\r\n")
+                        if not line.strip():
+                            continue
+                        if level_filter and not re.search(
+                            rf"\[{re.escape(level_filter)}\]", line
+                        ):
+                            continue
+                        if pattern:
+                            if use_regex:
+                                try:
+                                    if not re.search(pattern, line):
+                                        continue
+                                except re.error:
+                                    if pattern not in line:
+                                        continue
+                            elif pattern not in line:
                                 continue
-                    logs.append(line.rstrip())
-                    if len(logs) >= lines:
-                        break
+                        logs.append(line)
             except OSError as e:
                 logger.warning(f"[CLI] Failed to read log file: {e}")
                 return _build_error_response(
                     f"Failed to read log file: {e}", request_id
                 )
 
-            logs.reverse()
             log_text = "\n".join(logs)
             return json.dumps(
                 {
@@ -404,8 +555,10 @@ class SocketClientHandler:
         tool_name = request.get("tool_name", "")
         tool_args = request.get("tool_args", {})
 
-        if not tool_name:
+        if not isinstance(tool_name, str) or not tool_name:
             return _build_error_response("缺少 tool_name 参数", request_id)
+        if not isinstance(tool_args, dict):
+            return _build_error_response("tool_args 必须是 JSON 对象", request_id)
 
         tool = tool_mgr.get_func(tool_name)
         if tool is None:
@@ -414,13 +567,10 @@ class SocketClientHandler:
         if not tool.active:
             return _build_error_response(f"工具 {tool_name} 当前已停用", request_id)
 
-        if tool.handler is None:
-            return _build_error_response(
-                f"工具 {tool_name} 没有可调用的处理函数", request_id
-            )
-
         try:
-            # 构造一个最小化的 event 用于工具调用
+            from astrbot.core.agent.run_context import ContextWrapper
+            from astrbot.core.astr_agent_tool_exec import FunctionToolExecutor
+
             from .cli_event import CLIMessageEvent
 
             response_future = asyncio.Future()
@@ -438,8 +588,40 @@ class SocketClientHandler:
                 response_future=response_future,
             )
 
-            result = await tool.handler(event, **tool_args)
-            result_text = str(result) if result is not None else "(无返回值)"
+            run_context = ContextWrapper(
+                context=SimpleNamespace(event=event),
+                tool_call_timeout=int(self.RESPONSE_TIMEOUT),
+            )
+            guarded_tool = tool_mgr.get_full_tool_set().get_tool(tool_name)
+            executable_tool = guarded_tool or tool
+
+            if guarded_tool is not None:
+                permission_error = tool_mgr._check_tool_permission(
+                    tool_name, run_context
+                )
+                if permission_error is not None:
+                    return _build_error_response(permission_error, request_id)
+
+            result_parts: list[str] = []
+            async for result in FunctionToolExecutor.execute(
+                executable_tool,
+                run_context,
+                **tool_args,
+            ):
+                if isinstance(result, mcp.types.CallToolResult):
+                    text_parts = [
+                        content.text
+                        for content in result.content
+                        if isinstance(content, mcp.types.TextContent)
+                    ]
+                    if text_parts:
+                        result_parts.extend(text_parts)
+                    else:
+                        result_parts.append(result.model_dump_json())
+                elif result is not None:
+                    result_parts.append(str(result))
+
+            result_text = "\n".join(result_parts) or "(无返回值)"
 
             return json.dumps(
                 {

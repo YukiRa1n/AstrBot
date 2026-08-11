@@ -22,8 +22,8 @@ def get_astrbot_root() -> Path:
 
     查找顺序：
     1. 环境变量 ASTRBOT_ROOT
-    2. 通过包安装路径定位（editable install / 源码目录）
-    3. 从当前目录向上查找包含 .astrbot 标记的目录
+    2. 从当前目录向上查找包含 .astrbot 标记的目录
+    3. 通过包安装路径定位（editable install / 源码目录）
     4. 回退到当前工作目录
     """
     # 1. 环境变量
@@ -35,17 +35,17 @@ def get_astrbot_root() -> Path:
         if check_astrbot_root(p):
             return p
 
-    # 2. 通过包安装路径定位（editable install 场景）
-    # __file__ 在 astrbot/cli/utils/basic.py，向上 4 级到达项目根目录
-    source_root = Path(__file__).resolve().parent.parent.parent.parent
-    if check_astrbot_root(source_root):
-        return source_root
-
-    # 3. 向上查找 .astrbot 标记
+    # 2. 向上查找 .astrbot 标记。显式进入的实例应优先于源码安装目录。
     current = Path.cwd()
     for parent in [current, *current.parents]:
         if (parent / ".astrbot").exists():
             return parent
+
+    # 3. 通过包安装路径定位（editable install 场景）
+    # __file__ 在 astrbot/cli/utils/basic.py，向上 4 级到达项目根目录
+    source_root = Path(__file__).resolve().parent.parent.parent.parent
+    if check_astrbot_root(source_root):
+        return source_root
 
     # 4. 回退到当前目录
     return current

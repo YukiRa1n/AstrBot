@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import asyncio
 import traceback
 from asyncio import Queue
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from astrbot.core import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
@@ -11,6 +14,9 @@ from astrbot.core.utils.webhook_utils import ensure_platform_webhook_config
 from .platform import Platform, PlatformStatus
 from .register import platform_cls_map
 from .sources.webchat.webchat_adapter import WebChatAdapter
+
+if TYPE_CHECKING:
+    from astrbot.core.star.star_manager import PluginManager
 
 
 @dataclass
@@ -26,6 +32,7 @@ class PlatformManager:
 
         self._inst_map: dict[str, dict] = {}
         self._platform_tasks: dict[str, PlatformTasks] = {}
+        self._plugin_manager: PluginManager | None = None
 
         self.astrbot_config = config
         self.platforms_config = config["platform"]
@@ -36,6 +43,10 @@ class PlatformManager:
         unique_session in the project must use the default configuration.
         """
         self.event_queue = event_queue
+
+    def bind_plugin_manager(self, plugin_manager: PluginManager) -> None:
+        """Make runtime plugin control available to capable platform adapters."""
+        self._plugin_manager = plugin_manager
 
     def _is_valid_platform_id(self, platform_id: str | None) -> bool:
         if not platform_id:
@@ -220,6 +231,9 @@ class PlatformManager:
             return
         cls_type = platform_cls_map[platform_config["type"]]
         inst: Platform = cls_type(platform_config, self.settings, self.event_queue)
+        bind_plugin_manager = getattr(inst, "bind_plugin_manager", None)
+        if bind_plugin_manager is not None and self._plugin_manager is not None:
+            bind_plugin_manager(self._plugin_manager)
         self._inst_map[platform_config["id"]] = {
             "inst": inst,
             "client_id": inst.client_self_id,

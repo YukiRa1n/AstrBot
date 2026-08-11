@@ -253,6 +253,7 @@ class AstrBotCoreLifecycle:
 
         # 初始化插件管理器
         self.plugin_manager = PluginManager(self.star_context, self.astrbot_config)
+        self.platform_manager.bind_plugin_manager(self.plugin_manager)
 
         # 扫描、注册插件、实例化插件类
         await self.plugin_manager.reload()

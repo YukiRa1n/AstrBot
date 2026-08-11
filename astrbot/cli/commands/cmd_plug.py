@@ -15,9 +15,11 @@ from ..utils import (
 )
 
 
-@click.group()
+@click.group(
+    epilog="运行时启用、禁用或重载插件：astr plugin --help",
+)
 def plug() -> None:
-    """Plugin management"""
+    """安装、更新和移除插件文件。"""
 
 
 def _get_data_path() -> Path:

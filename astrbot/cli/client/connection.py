@@ -7,14 +7,37 @@ import json
 import os
 import socket
 import sys
+import tempfile
 import uuid
+from pathlib import Path
 
 
-def _get_source_root() -> str:
+def _get_source_root() -> Path:
     """源码安装根目录（通过 __file__ 向上定位）。"""
-    return os.path.realpath(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../..")
-    )
+    return Path(__file__).resolve().parents[3]
+
+
+def _get_working_root() -> Path | None:
+    """Locate the nearest AstrBot instance rooted at the current directory."""
+    current = Path.cwd().resolve()
+    candidates = (current, *current.parents)
+
+    for candidate in candidates:
+        data_dir = candidate / "data"
+        if (data_dir / ".cli_connection").is_file() or (
+            data_dir / ".cli_token"
+        ).is_file():
+            return candidate
+
+    for candidate in candidates:
+        data_dir = candidate / "data"
+        if data_dir.is_dir() and (
+            candidate == current
+            or (candidate / "astrbot").is_dir()
+            or (candidate / "pyproject.toml").is_file()
+        ):
+            return candidate
+    return None
 
 
 def get_data_path() -> str:
@@ -22,29 +45,30 @@ def get_data_path() -> str:
 
     优先级：
     1. 环境变量 ASTRBOT_ROOT
-    2. 源码安装目录（通过 __file__ 获取）
-    3. 当前工作目录
+    2. 当前工作目录或其最近的 AstrBot 父目录
+    3. 客户端源码目录（通过 __file__ 获取）
     """
     if root := os.environ.get("ASTRBOT_ROOT"):
-        return os.path.join(root, "data")
+        return str(Path(root).expanduser().resolve() / "data")
 
-    data_dir = os.path.join(_get_source_root(), "data")
-    if os.path.exists(data_dir):
-        return data_dir
+    if working_root := _get_working_root():
+        return str(working_root / "data")
 
-    return os.path.join(os.path.realpath(os.getcwd()), "data")
+    source_data = _get_source_root() / "data"
+    if source_data.is_dir():
+        return str(source_data)
+
+    return str(Path.cwd().resolve() / "data")
 
 
 def get_temp_path() -> str:
     """获取临时目录路径,兼容容器和非容器环境"""
     if root := os.environ.get("ASTRBOT_ROOT"):
-        return os.path.join(root, "data", "temp")
+        return str(Path(root).expanduser().resolve() / "data" / "temp")
 
-    source_root = _get_source_root()
-    if os.path.isdir(os.path.join(source_root, "data")):
-        return os.path.join(source_root, "data", "temp")
-
-    import tempfile
+    data_path = Path(get_data_path())
+    if data_path.is_dir():
+        return str(data_path / "temp")
 
     return tempfile.gettempdir()
 
@@ -55,11 +79,10 @@ def load_auth_token() -> str:
     Returns:
         token字符串,如果文件不存在则返回空字符串
     """
-    token_file = os.path.join(get_data_path(), ".cli_token")
+    token_file = Path(get_data_path()) / ".cli_token"
     try:
-        with open(token_file, encoding="utf-8") as f:
-            return f.read().strip()
-    except Exception:
+        return token_file.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
         return ""
 
 
@@ -74,10 +97,17 @@ def load_connection_info(data_dir: str) -> dict | None:
     Returns:
         连接信息字典，如果文件不存在则返回None
     """
-    connection_file = os.path.join(data_dir, ".cli_connection")
+    connection_file = Path(data_dir) / ".cli_connection"
     try:
-        with open(connection_file, encoding="utf-8") as f:
-            return json.load(f)
+        with connection_file.open(encoding="utf-8") as f:
+            connection_info = json.load(f)
+        if not isinstance(connection_info, dict):
+            print(
+                f"[ERROR] Connection file must contain a JSON object: {connection_file}",
+                file=sys.stderr,
+            )
+            return None
+        return connection_info
     except FileNotFoundError:
         return None
     except json.JSONDecodeError as e:
@@ -113,6 +143,7 @@ def connect_to_server(connection_info: dict, timeout: float = 120.0) -> socket.s
     """
     socket_type = connection_info.get("type")
 
+    client_socket: socket.socket | None = None
     if socket_type == "unix":
         socket_path = connection_info.get("path")
         if not socket_path:
@@ -123,16 +154,22 @@ def connect_to_server(connection_info: dict, timeout: float = 120.0) -> socket.s
             client_socket.settimeout(timeout)
             client_socket.connect(socket_path)
             return client_socket
-        except FileNotFoundError:
+        except FileNotFoundError as error:
+            if client_socket is not None:
+                client_socket.close()
             raise ConnectionError(
                 f"Socket file not found: {socket_path}. Is AstrBot running?"
-            )
-        except ConnectionRefusedError:
+            ) from error
+        except ConnectionRefusedError as error:
+            if client_socket is not None:
+                client_socket.close()
             raise ConnectionError(
                 "Connection refused. Is AstrBot running in socket mode?"
-            )
+            ) from error
         except Exception as e:
-            raise ConnectionError(f"Unix socket connection error: {e}")
+            if client_socket is not None:
+                client_socket.close()
+            raise ConnectionError(f"Unix socket connection error: {e}") from e
 
     elif socket_type == "tcp":
         host = connection_info.get("host")
@@ -145,14 +182,20 @@ def connect_to_server(connection_info: dict, timeout: float = 120.0) -> socket.s
             client_socket.settimeout(timeout)
             client_socket.connect((host, port))
             return client_socket
-        except ConnectionRefusedError:
+        except ConnectionRefusedError as error:
+            if client_socket is not None:
+                client_socket.close()
             raise ConnectionError(
                 f"Connection refused to {host}:{port}. Is AstrBot running?"
-            )
-        except TimeoutError:
-            raise ConnectionError(f"Connection timeout to {host}:{port}")
+            ) from error
+        except TimeoutError as error:
+            if client_socket is not None:
+                client_socket.close()
+            raise ConnectionError(f"Connection timeout to {host}:{port}") from error
         except Exception as e:
-            raise ConnectionError(f"TCP socket connection error: {e}")
+            if client_socket is not None:
+                client_socket.close()
+            raise ConnectionError(f"TCP socket connection error: {e}") from e
 
     else:
         raise ValueError(
@@ -198,16 +241,15 @@ def _get_connected_socket(
     Raises:
         ValueError, ConnectionError: 连接失败时
     """
+    if socket_path is not None:
+        return connect_to_server({"type": "unix", "path": socket_path}, timeout)
+
     data_dir = get_data_path()
     connection_info = load_connection_info(data_dir)
-
     if connection_info is not None:
         return connect_to_server(connection_info, timeout)
 
-    if socket_path is None:
-        socket_path = os.path.join(get_temp_path(), "astrbot.sock")
-
-    fallback_info = {"type": "unix", "path": socket_path}
+    fallback_info = {"type": "unix", "path": str(Path(get_temp_path()) / "astrbot.sock")}
     return connect_to_server(fallback_info, timeout)
 
 
@@ -289,6 +331,26 @@ def get_logs(
     )
 
 
+def get_capabilities(
+    socket_path: str | None = None,
+    timeout: float = 5.0,
+) -> dict:
+    """Return the running instance's CLI protocol capabilities."""
+    return _send_action_request(
+        "get_capabilities",
+        socket_path=socket_path,
+        timeout=timeout,
+    )
+
+
+def ping_server(
+    socket_path: str | None = None,
+    timeout: float = 5.0,
+) -> dict:
+    """Ping the CLI control socket without entering the message pipeline."""
+    return _send_action_request("ping", socket_path=socket_path, timeout=timeout)
+
+
 def _send_action_request(
     action: str,
     extra_fields: dict | None = None,
@@ -302,9 +364,85 @@ def _send_action_request(
     return _send_request(request, socket_path, timeout)
 
 
+def _send_supported_action(
+    action: str,
+    *,
+    extra_fields: dict | None = None,
+    socket_path: str | None = None,
+    timeout: float = 30.0,
+) -> dict:
+    """Verify a server capability before invoking a versioned action."""
+    capability_response = get_capabilities(
+        socket_path=socket_path,
+        timeout=min(timeout, 5.0),
+    )
+    if capability_response.get("status") != "success":
+        return capability_response
+    capabilities = capability_response.get("capabilities")
+    if not isinstance(capabilities, list) or action not in capabilities:
+        return {
+            "status": "error",
+            "error": (
+                f"运行中的 AstrBot 不支持 CLI action '{action}'，"
+                "请升级服务端或确认连接到了正确实例。"
+            ),
+            "error_code": "UNSUPPORTED_ACTION",
+        }
+    return _send_action_request(
+        action,
+        extra_fields=extra_fields,
+        socket_path=socket_path,
+        timeout=timeout,
+    )
+
+
 def list_tools(socket_path: str | None = None, timeout: float = 120.0) -> dict:
     """列出所有注册的函数工具"""
     return _send_action_request("list_tools", socket_path=socket_path, timeout=timeout)
+
+
+def list_plugins(
+    socket_path: str | None = None,
+    timeout: float = 30.0,
+) -> dict:
+    """List plugins loaded by the running AstrBot instance."""
+    return _send_supported_action(
+        "list_plugins",
+        socket_path=socket_path,
+        timeout=timeout,
+    )
+
+
+def set_plugin_enabled(
+    plugin: str,
+    *,
+    enabled: bool,
+    socket_path: str | None = None,
+    timeout: float = 120.0,
+) -> dict:
+    """Enable or disable one runtime plugin."""
+    return _send_supported_action(
+        "set_plugin_enabled",
+        extra_fields={"plugin": plugin, "enabled": enabled},
+        socket_path=socket_path,
+        timeout=timeout,
+    )
+
+
+def reload_plugin(
+    plugin: str | None = None,
+    *,
+    reload_all: bool = False,
+    socket_path: str | None = None,
+    timeout: float = 180.0,
+) -> dict:
+    """Reload one runtime plugin or explicitly reload all plugins."""
+    return _send_supported_action(
+        "reload_plugin",
+        extra_fields={"plugin": plugin, "reload_all": reload_all},
+        socket_path=socket_path,
+        timeout=timeout,
+    )
 
 
 def call_tool(

@@ -33,7 +33,7 @@ class TestSendCommand:
 
         assert result.exit_code == 0
         assert "你好!" in result.output
-        mock_send.assert_called_once_with("你好", None, 30.0)
+        mock_send.assert_called_once_with("你好", None, 120.0)
 
     @patch("astrbot.cli.client.commands.send.send_message")
     def test_send_with_json(self, mock_send):
@@ -54,7 +54,7 @@ class TestSendCommand:
         result = runner.invoke(main, ["send", "hello", "world"])
 
         assert result.exit_code == 0
-        mock_send.assert_called_once_with("hello world", None, 30.0)
+        mock_send.assert_called_once_with("hello world", None, 120.0)
 
     @patch("astrbot.cli.client.commands.send.send_message")
     def test_implicit_send(self, mock_send):
@@ -91,7 +91,7 @@ class TestSendCommand:
         runner = CliRunner()
         result = runner.invoke(main, ["send"])
 
-        assert result.exit_code == 1
+        assert result.exit_code == 2
 
     @patch("astrbot.cli.client.commands.send.send_message")
     def test_send_with_timeout(self, mock_send):
@@ -111,7 +111,7 @@ class TestSendCommand:
         result = runner.invoke(main, ["send"], input="hello from pipe")
 
         assert result.exit_code == 0
-        mock_send.assert_called_once_with("hello from pipe", None, 30.0)
+        mock_send.assert_called_once_with("hello from pipe", None, 120.0)
 
 
 class TestLogCommand:
@@ -172,27 +172,27 @@ class TestLogCommand:
 class TestConvCommand:
     """conv 命令组测试"""
 
-    @patch("astrbot.cli.client.commands.conv.send_message")
-    def test_conv_ls(self, mock_send):
-        """列出对话"""
-        mock_send.return_value = _mock_send("对话列表...")
+    @patch("astrbot.cli.client.commands.chat.send_message")
+    def test_removed_conversation_commands_fail_locally(self, mock_send):
+        """不存在的服务端指令应给出迁移提示，且不得发送消息。"""
         runner = CliRunner()
-        result = runner.invoke(main, ["conv", "ls"])
+        commands = (
+            ["conv", "ls"],
+            ["conv", "ls", "2"],
+            ["conv", "switch", "3"],
+            ["conv", "del"],
+            ["conv", "rename", "新名称"],
+            ["conv", "history"],
+            ["conv", "history", "2"],
+        )
 
-        assert result.exit_code == 0
-        mock_send.assert_called_once_with("/ls")
+        for arguments in commands:
+            result = runner.invoke(main, arguments)
+            assert result.exit_code == 1
+            assert "移除" in result.output or "不支持" in result.output
+        mock_send.assert_not_called()
 
-    @patch("astrbot.cli.client.commands.conv.send_message")
-    def test_conv_ls_page(self, mock_send):
-        """带页码列出对话"""
-        mock_send.return_value = _mock_send("第2页")
-        runner = CliRunner()
-        result = runner.invoke(main, ["conv", "ls", "2"])
-
-        assert result.exit_code == 0
-        mock_send.assert_called_once_with("/ls 2")
-
-    @patch("astrbot.cli.client.commands.conv.send_message")
+    @patch("astrbot.cli.client.commands.chat.send_message")
     def test_conv_new(self, mock_send):
         """创建新对话"""
         mock_send.return_value = _mock_send("已创建")
@@ -202,37 +202,7 @@ class TestConvCommand:
         assert result.exit_code == 0
         mock_send.assert_called_once_with("/new")
 
-    @patch("astrbot.cli.client.commands.conv.send_message")
-    def test_conv_switch(self, mock_send):
-        """切换对话"""
-        mock_send.return_value = _mock_send("已切换")
-        runner = CliRunner()
-        result = runner.invoke(main, ["conv", "switch", "3"])
-
-        assert result.exit_code == 0
-        mock_send.assert_called_once_with("/switch 3")
-
-    @patch("astrbot.cli.client.commands.conv.send_message")
-    def test_conv_del(self, mock_send):
-        """删除对话"""
-        mock_send.return_value = _mock_send("已删除")
-        runner = CliRunner()
-        result = runner.invoke(main, ["conv", "del"])
-
-        assert result.exit_code == 0
-        mock_send.assert_called_once_with("/del")
-
-    @patch("astrbot.cli.client.commands.conv.send_message")
-    def test_conv_rename(self, mock_send):
-        """重命名对话"""
-        mock_send.return_value = _mock_send("已重命名")
-        runner = CliRunner()
-        result = runner.invoke(main, ["conv", "rename", "新名称"])
-
-        assert result.exit_code == 0
-        mock_send.assert_called_once_with("/rename 新名称")
-
-    @patch("astrbot.cli.client.commands.conv.send_message")
+    @patch("astrbot.cli.client.commands.chat.send_message")
     def test_conv_reset(self, mock_send):
         """重置 LLM 会话"""
         mock_send.return_value = _mock_send("已重置")
@@ -242,85 +212,106 @@ class TestConvCommand:
         assert result.exit_code == 0
         mock_send.assert_called_once_with("/reset")
 
-    @patch("astrbot.cli.client.commands.conv.send_message")
-    def test_conv_history(self, mock_send):
-        """查看对话记录"""
-        mock_send.return_value = _mock_send("记录...")
-        runner = CliRunner()
-        result = runner.invoke(main, ["conv", "history"])
-
-        assert result.exit_code == 0
-        mock_send.assert_called_once_with("/history")
-
-    @patch("astrbot.cli.client.commands.conv.send_message")
-    def test_conv_history_page(self, mock_send):
-        """带页码查看记录"""
-        mock_send.return_value = _mock_send("第2页")
-        runner = CliRunner()
-        result = runner.invoke(main, ["conv", "history", "2"])
-
-        assert result.exit_code == 0
-        mock_send.assert_called_once_with("/history 2")
-
-
 class TestPluginCommand:
     """plugin 命令组测试"""
 
-    @patch("astrbot.cli.client.commands.plugin.send_message")
-    def test_plugin_ls(self, mock_send):
+    plugin_response = {
+        "status": "success",
+        "response": "共 1 个插件",
+        "plugins": [
+            {
+                "id": "myplugin",
+                "plugin_id": "demo.myplugin",
+                "name": "myplugin",
+                "version": "1.0",
+                "author": "tester",
+                "description": "demo",
+                "status": "enabled",
+                "enabled": True,
+                "reserved": False,
+            }
+        ],
+    }
+
+    @patch("astrbot.cli.client.commands.plugin.list_plugins")
+    def test_plugin_ls(self, mock_list):
         """列出插件"""
-        mock_send.return_value = _mock_send("插件列表")
+        mock_list.return_value = self.plugin_response
         runner = CliRunner()
         result = runner.invoke(main, ["plugin", "ls"])
 
         assert result.exit_code == 0
-        mock_send.assert_called_once_with("/plugin ls")
+        assert "myplugin" in result.output
+        mock_list.assert_called_once_with()
 
-    @patch("astrbot.cli.client.commands.plugin.send_message")
-    def test_plugin_on(self, mock_send):
+    @patch("astrbot.cli.client.commands.plugin.set_plugin_enabled")
+    def test_plugin_on(self, mock_set_enabled):
         """启用插件"""
-        mock_send.return_value = _mock_send("已启用")
+        mock_set_enabled.return_value = _mock_send("已启用")
         runner = CliRunner()
         result = runner.invoke(main, ["plugin", "on", "myplugin"])
 
         assert result.exit_code == 0
-        mock_send.assert_called_once_with("/plugin on myplugin")
+        mock_set_enabled.assert_called_once_with("myplugin", enabled=True)
 
-    @patch("astrbot.cli.client.commands.plugin.send_message")
-    def test_plugin_off(self, mock_send):
+    @patch("astrbot.cli.client.commands.plugin.set_plugin_enabled")
+    def test_plugin_off(self, mock_set_enabled):
         """禁用插件"""
-        mock_send.return_value = _mock_send("已禁用")
+        mock_set_enabled.return_value = _mock_send("已禁用")
         runner = CliRunner()
         result = runner.invoke(main, ["plugin", "off", "myplugin"])
 
         assert result.exit_code == 0
-        mock_send.assert_called_once_with("/plugin off myplugin")
+        mock_set_enabled.assert_called_once_with("myplugin", enabled=False)
 
-    @patch("astrbot.cli.client.commands.plugin.send_message")
-    def test_plugin_help(self, mock_send):
+    @patch("astrbot.cli.client.commands.plugin.list_plugins")
+    def test_plugin_help(self, mock_list):
         """获取插件帮助"""
-        mock_send.return_value = _mock_send("帮助信息")
+        mock_list.return_value = self.plugin_response
         runner = CliRunner()
         result = runner.invoke(main, ["plugin", "help", "myplugin"])
 
         assert result.exit_code == 0
-        mock_send.assert_called_once_with("/plugin help myplugin")
+        assert "demo.myplugin" in result.output
+        mock_list.assert_called_once_with()
 
-    @patch("astrbot.cli.client.commands.plugin.send_message")
-    def test_plugin_help_no_name(self, mock_send):
-        """获取通用插件帮助"""
-        mock_send.return_value = _mock_send("通用帮助")
+    def test_plugin_help_no_name(self):
+        """查看插件信息必须指定名称。"""
         runner = CliRunner()
         result = runner.invoke(main, ["plugin", "help"])
 
+        assert result.exit_code == 2
+
+    @patch("astrbot.cli.client.commands.plugin.reload_plugin")
+    def test_plugin_reload_one(self, mock_reload):
+        """重载单个插件使用原生控制动作。"""
+        mock_reload.return_value = _mock_send("已重载")
+
+        result = CliRunner().invoke(main, ["plugin", "reload", "myplugin"])
+
         assert result.exit_code == 0
-        mock_send.assert_called_once_with("/plugin help")
+        mock_reload.assert_called_once_with(
+            "myplugin", reload_all=False, timeout=180.0
+        )
+
+    @patch("astrbot.cli.client.commands.plugin.reload_plugin")
+    def test_plugin_reload_all_is_explicit(self, mock_reload):
+        """重载全部插件必须显式使用 --all。"""
+        mock_reload.return_value = _mock_send("已全部重载")
+        runner = CliRunner()
+
+        result = runner.invoke(main, ["plugin", "reload", "--all"])
+        missing_scope = runner.invoke(main, ["plugin", "reload"])
+
+        assert result.exit_code == 0
+        assert missing_scope.exit_code == 2
+        mock_reload.assert_called_once_with(None, reload_all=True, timeout=180.0)
 
 
 class TestProviderModelKey:
     """provider/model/key 命令测试"""
 
-    @patch("astrbot.cli.client.commands.provider.send_message")
+    @patch("astrbot.cli.client.commands.config.send_message")
     def test_provider_list(self, mock_send):
         """查看 Provider 列表"""
         mock_send.return_value = _mock_send("provider list")
@@ -330,7 +321,7 @@ class TestProviderModelKey:
         assert result.exit_code == 0
         mock_send.assert_called_once_with("/provider")
 
-    @patch("astrbot.cli.client.commands.provider.send_message")
+    @patch("astrbot.cli.client.commands.config.send_message")
     def test_provider_switch(self, mock_send):
         """切换 Provider"""
         mock_send.return_value = _mock_send("switched")
@@ -340,79 +331,57 @@ class TestProviderModelKey:
         assert result.exit_code == 0
         mock_send.assert_called_once_with("/provider 2")
 
-    @patch("astrbot.cli.client.commands.provider.send_message")
-    def test_model_list(self, mock_send):
-        """查看模型列表"""
-        mock_send.return_value = _mock_send("model list")
+    @patch("astrbot.cli.client.commands.config.send_message")
+    def test_removed_model_and_key_commands_fail_locally(self, mock_send):
+        """服务端未注册的 model/key 指令不得继续发送。"""
         runner = CliRunner()
-        result = runner.invoke(main, ["model"])
 
-        assert result.exit_code == 0
-        mock_send.assert_called_once_with("/model")
-
-    @patch("astrbot.cli.client.commands.provider.send_message")
-    def test_model_switch(self, mock_send):
-        """切换模型"""
-        mock_send.return_value = _mock_send("switched")
-        runner = CliRunner()
-        result = runner.invoke(main, ["model", "gpt-4"])
-
-        assert result.exit_code == 0
-        mock_send.assert_called_once_with("/model gpt-4")
-
-    @patch("astrbot.cli.client.commands.provider.send_message")
-    def test_key_list(self, mock_send):
-        """查看 Key 列表"""
-        mock_send.return_value = _mock_send("key list")
-        runner = CliRunner()
-        result = runner.invoke(main, ["key"])
-
-        assert result.exit_code == 0
-        mock_send.assert_called_once_with("/key")
-
-    @patch("astrbot.cli.client.commands.provider.send_message")
-    def test_key_switch(self, mock_send):
-        """切换 Key"""
-        mock_send.return_value = _mock_send("switched")
-        runner = CliRunner()
-        result = runner.invoke(main, ["key", "1"])
-
-        assert result.exit_code == 0
-        mock_send.assert_called_once_with("/key 1")
+        for arguments in (["model"], ["model", "gpt-4"], ["key"], ["key", "1"]):
+            result = runner.invoke(main, arguments)
+            assert result.exit_code == 1
+            assert "provider" in result.output.lower() or "API Key" in result.output
+        mock_send.assert_not_called()
 
 
 class TestDebugCommands:
     """调试命令测试"""
 
-    @patch("astrbot.cli.client.commands.debug.send_message")
-    def test_ping(self, mock_send):
+    @patch("astrbot.cli.client.commands.system.ping_server")
+    def test_ping(self, mock_ping):
         """ping 测试"""
-        mock_send.return_value = _mock_send("help text")
+        mock_ping.return_value = {"status": "success", "response": "pong"}
         runner = CliRunner()
         result = runner.invoke(main, ["ping"])
 
         assert result.exit_code == 0
         assert "pong" in result.output
 
-    @patch("astrbot.cli.client.commands.debug.send_message")
-    def test_ping_count(self, mock_send):
+    @patch("astrbot.cli.client.commands.system.ping_server")
+    def test_ping_count(self, mock_ping):
         """多次 ping"""
-        mock_send.return_value = _mock_send("help text")
+        mock_ping.return_value = {"status": "success", "response": "pong"}
         runner = CliRunner()
         result = runner.invoke(main, ["ping", "-c", "3"])
 
         assert result.exit_code == 0
         assert result.output.count("pong") == 3
+        assert mock_ping.call_count == 3
 
-    @patch("astrbot.cli.client.commands.debug.send_message")
-    @patch("astrbot.cli.client.commands.debug.load_auth_token", return_value="tok123")
+    @patch("astrbot.cli.client.commands.system.get_capabilities")
+    @patch("astrbot.cli.client.commands.system.load_auth_token", return_value="tok123")
     @patch(
-        "astrbot.cli.client.commands.debug.load_connection_info",
+        "astrbot.cli.client.commands.system.load_connection_info",
         return_value={"type": "tcp", "host": "127.0.0.1", "port": 12345},
     )
-    def test_status(self, mock_conn, mock_token, mock_send):
+    def test_status(self, mock_conn, mock_token, mock_capabilities):
         """status 命令"""
-        mock_send.return_value = _mock_send("help text")
+        mock_capabilities.return_value = {
+            "status": "success",
+            "response": "CLI capabilities",
+            "protocol_version": 2,
+            "astrbot_version": "4.0.0",
+            "capabilities": ["ping"],
+        }
         runner = CliRunner()
         result = runner.invoke(main, ["status"])
 
@@ -420,8 +389,9 @@ class TestDebugCommands:
         assert "TCP" in result.output
         assert "127.0.0.1" in result.output
         assert "在线" in result.output
+        assert "CLI 协议: v2" in result.output
 
-    @patch("astrbot.cli.client.commands.debug.send_message")
+    @patch("astrbot.cli.client.commands.system.send_message")
     def test_test_echo(self, mock_send):
         """test echo 命令"""
         mock_send.return_value = _mock_send("echo response")
@@ -432,7 +402,7 @@ class TestDebugCommands:
         assert "hello" in result.output
         assert "echo response" in result.output
 
-    @patch("astrbot.cli.client.commands.debug.send_message")
+    @patch("astrbot.cli.client.commands.system.send_message")
     def test_test_plugin(self, mock_send):
         """test plugin 命令"""
         mock_send.return_value = _mock_send("plugin response")
@@ -446,7 +416,7 @@ class TestDebugCommands:
 class TestAliasCommands:
     """快捷别名命令测试"""
 
-    @patch("astrbot.cli.client.connection.send_message")
+    @patch("astrbot.cli.client.commands.chat.send_message")
     def test_help_alias(self, mock_send):
         """help 别名"""
         mock_send.return_value = _mock_send("help text")
@@ -456,7 +426,7 @@ class TestAliasCommands:
         assert result.exit_code == 0
         mock_send.assert_called_with("/help")
 
-    @patch("astrbot.cli.client.connection.send_message")
+    @patch("astrbot.cli.client.commands.chat.send_message")
     def test_sid_alias(self, mock_send):
         """sid 别名"""
         mock_send.return_value = _mock_send("session_123")
@@ -466,31 +436,22 @@ class TestAliasCommands:
         assert result.exit_code == 0
         mock_send.assert_called_with("/sid")
 
-    @patch("astrbot.cli.client.connection.send_message")
-    def test_t2i_alias(self, mock_send):
-        """t2i 别名"""
-        mock_send.return_value = _mock_send("toggled")
+    @patch("astrbot.cli.client.commands.chat.send_message")
+    def test_removed_media_aliases_fail_locally(self, mock_send):
+        """服务端未注册的媒体切换指令不得继续发送。"""
         runner = CliRunner()
-        result = runner.invoke(main, ["t2i"])
 
-        assert result.exit_code == 0
-        mock_send.assert_called_with("/t2i")
-
-    @patch("astrbot.cli.client.connection.send_message")
-    def test_tts_alias(self, mock_send):
-        """tts 别名"""
-        mock_send.return_value = _mock_send("toggled")
-        runner = CliRunner()
-        result = runner.invoke(main, ["tts"])
-
-        assert result.exit_code == 0
-        mock_send.assert_called_with("/tts")
+        for name in ("t2i", "tts"):
+            result = runner.invoke(main, [name])
+            assert result.exit_code == 1
+            assert "不再提供" in result.output
+        mock_send.assert_not_called()
 
 
 class TestBatchCommand:
     """batch 命令测试"""
 
-    @patch("astrbot.cli.client.connection.send_message")
+    @patch("astrbot.cli.client.commands.send.send_message")
     def test_batch(self, mock_send, tmp_path):
         """批量执行"""
         mock_send.return_value = _mock_send("ok")
@@ -503,9 +464,9 @@ class TestBatchCommand:
 
         assert result.exit_code == 0
         assert mock_send.call_count == 3
-        mock_send.assert_any_call("hello")
-        mock_send.assert_any_call("/help")
-        mock_send.assert_any_call("/plugin ls")
+        mock_send.assert_any_call("hello", None, 120.0)
+        mock_send.assert_any_call("/help", None, 120.0)
+        mock_send.assert_any_call("/plugin ls", None, 120.0)
 
 
 class TestBackwardCompatibility:
@@ -537,11 +498,11 @@ class TestBackwardCompatibility:
 
         assert result.exit_code == 0
         assert "send" in result.output
-        assert "log" in result.output
-        assert "conv" in result.output
+        assert "system" in result.output
+        assert "chat" in result.output
         assert "plugin" in result.output
-        assert "provider" in result.output
-        assert "ping" in result.output
+        assert "config" in result.output
+        assert "tool" in result.output
 
 
 class TestSessionCommand:
